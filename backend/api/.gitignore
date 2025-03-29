@@ -1,0 +1,6 @@
+# Composer dependencies
+vendor/
+
+# Database file
+*.db
+*.sqlite
