@@ -13,25 +13,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 // --- Database Connection ---
 $dbPath = __DIR__ . '/../cargo_database.sqlite'; // Path relative to this file
-$db = null; // Initialize db variable
+require_once __DIR__ . '/../database.php'; // Include the connection helper
+error_log("Attempting to get DB connection...");
+$db = getDbConnection(); // Call the function
 
-try {
-    $db = new PDO('sqlite:' . $dbPath);
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC); // Fetch as associative arrays
-    $db->exec('PRAGMA foreign_keys = ON;');
-} catch (PDOException $e) {
-    error_log("FATAL: Database connection error: " . $e->getMessage()); 
-    http_response_code(500); 
+// Check if the connection failed (function returned null)
+if ($db === null) {
+    error_log("Failed to get DB connection from database.php. Script cannot continue.");
+    http_response_code(500); // Internal Server Error
     echo json_encode([
-        'success' => false,
-        'message' => 'Database connection error: ' . $e->getMessage(),
-        'containersImported' => 0,
+        'success' => false, 
+        'message' => 'Critical error: Database connection failed.', 
+        'containersImported' => 0, 
         'errors' => []
     ]);
-    exit; 
+    exit; // Stop script if DB connection fails
 }
-
+error_log("Successfully obtained DB connection.");
+// --- End Database Connection (Replaced Block) --- 
 
 // --- Request Handling ---
 $response = [
