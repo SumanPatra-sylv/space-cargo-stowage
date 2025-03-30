@@ -1,0 +1,10 @@
+itemId,name,width,depth,height,mass,priority,expiryDate,usageLimit,preferredZone
+ITM001,Food Pack Alpha,10,10,20,1,80,2025-12-31,5,Crew Quarters
+ITM002,Water Bottle,8,8,25,0.6,90,2026-06-30,1,Crew Quarters
+ITM003,Screwdriver Set,20,15,5,0.8,60,,,Tool Storage
+ITM004,Sensor Array Beta,30,30,10,2.5,95,2025-11-01,,Payload Bay
+ITM005,First Aid Kit,25,20,15,1.5,100,,1,Medical Bay
+ITM006,Spare Battery,5,5,10,0.3,70,,,Electronics Bin
+ITM007,Sample Container,12,12,12,0.2,85,2025-08-15,1,Laboratory
+BADITM,Bad Data Row,10,10,10,1,150,2025-01-01,1,ZoneX 
+ITM008,Data Cable,100,1,1,0.1,50,,,Any
