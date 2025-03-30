@@ -228,9 +228,9 @@ error_log("Placement API: Finished.");
 
 /**
  * Tries to find a valid position for an item within a container, avoiding existing items.
- * Includes basic iteration along X, Y, Z and proper collision detection.
+ * Includes iteration along X, Y, Z and proper collision detection.
+ * Prioritizes lower Y (depth), then lower Z (height), then lower X (width).
  * Rotation logic is present but commented out initially.
- * Prioritizes lower Y (depth).
  *
  * @param array $itemToPlace The item to place (needs 'itemId', 'width', 'depth', 'height')
  * @param array $container The container (needs 'containerId', 'width', 'depth', 'height')
@@ -259,6 +259,10 @@ function findSpaceForItem(array $itemToPlace, array $container, array $existingI
         */
     ];
 
+    // Define a step size for iteration (e.g., 1 cm). Smaller steps = potentially better packing but slower.
+    // Could be adjusted based on item/container sizes or performance needs.
+    $step = 1; // Or potentially $step = 5; etc.
+
     foreach ($orientations as $index => $dims) {
         $itemW = $dims[0];
         $itemD = $dims[1];
@@ -270,13 +274,13 @@ function findSpaceForItem(array $itemToPlace, array $container, array $existingI
             continue; 
         }
 
-        // --- Iterate through possible positions (Depth-first, then Width, then Height) ---
+        // --- Iterate through possible positions (Depth-first, then Height, then Width) ---
         // Iterate Y (depth) from front to back (prioritize front)
-        for ($y = 0; $y <= $containerD - $itemD; $y++) { 
-            // Iterate X (width) from left to right
-            for ($x = 0; $x <= $containerW - $itemW; $x++) { 
-                // Iterate Z (height) from bottom to top
-                for ($z = 0; $z <= $containerH - $itemH; $z++) { 
+        for ($y = 0; $y <= $containerD - $itemD; $y += $step) { 
+            // Iterate Z (height) from bottom to top
+            for ($z = 0; $z <= $containerH - $itemH; $z += $step) { 
+                // Iterate X (width) from left to right
+                for ($x = 0; $x <= $containerW - $itemW; $x += $step) { 
 
                     // Define the bounding box for the item at this potential position
                     $itemBox = ['x' => $x, 'y' => $y, 'z' => $z, 'w' => $itemW, 'd' => $itemD, 'h' => $itemH];
@@ -284,17 +288,14 @@ function findSpaceForItem(array $itemToPlace, array $container, array $existingI
                     // --- Collision Check ---
                     $collision = false;
                     foreach ($existingItemsInContainer as $existingItem) {
-                         // $existingItem already has x, y, z, w, d, h keys
                          if (boxesOverlap($itemBox, $existingItem)) {
-                            // Optional: Log collision details if needed for debugging
-                            // error_log("Item $itemId: Collision at (X:$x Y:$y Z:$z) Orientation $index with existing " . $existingItem['id']);
                             $collision = true;
-                            break; // Collision found, no need to check other existing items for this spot
+                            break; 
                          }
                     }
                     // --- End Collision Check ---
 
-                    // If NO collision detected for this position (x, y, z) and orientation
+                    // If NO collision detected
                     if (!$collision) {
                         error_log("Item $itemId: Found valid space in container " . $container['containerId'] . " at (X:$x, Y:$y, Z:$z) using orientation $index.");
                         return [
@@ -306,8 +307,8 @@ function findSpaceForItem(array $itemToPlace, array $container, array $existingI
                             'ori_h' => $itemH
                         ];
                     }
-                } // End Z loop
-            } // End X loop
+                } // End X loop
+            } // End Z loop
         } // End Y loop
     } // End loop through orientations
 
