@@ -248,7 +248,8 @@ try {
     } else {
          error_log("Simulate API: Successfully updated simulation date file to $newDateStr");
     }
-    $response['newDate'] = $simulationEndDate->format(DATE_ISO8601); // Return ISO format
+    // Corrected line:
+$response['newDate'] = $simulationEndDate->format(DateTime::ATOM); // Use ATOM constant
 
 
     // Commit all changes for the simulation period
