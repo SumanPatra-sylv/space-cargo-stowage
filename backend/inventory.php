@@ -1,16 +1,8 @@
 <?php
-// backend/inventory.php (Modified for central index.php handling)
+// backend/inventory.php (Modified for central index.php handling - CORRECTED QUERY)
 
 /* --- REMOVED/COMMENTED OUT - Handled by index.php ---
-// header("Content-Type: application/json"); // Handled by index.php
-// header("Access-Control-Allow-Origin: *"); // Handled by index.php
-// header("Access-Control-Allow-Methods: GET, OPTIONS"); // Handled by index.php
-// header("Access-Control-Allow-Headers: Content-Type"); // Handled by index.php
-//
-// if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-//     http_response_code(204); // Note: index.php uses 200 for OPTIONS
-//     exit;
-// }
+// ... (headers and OPTIONS handling) ...
 --- END REMOVED/COMMENTED OUT --- */
 
 // Use __DIR__ for robust path handling when included by index.php
@@ -22,42 +14,36 @@ $db = null;
 try {
     $db = getDbConnection();
     if ($db === null) {
-        // If DB connection fails, send an error response
-        // index.php already set Content-Type
         http_response_code(503); // Service Unavailable
-        echo json_encode(['error' => 'Database connection unavailable.']);
+        echo json_encode(['success' => false, 'error' => 'Database connection unavailable.']); // Added success:false
         error_log("inventory.php Error: Failed to get DB connection.");
-        exit; // Exit script execution here
+        exit;
     }
 
-    // Query items that are placed
-    // *** FIXED: Changed 'id' to 'itemId' ***
-    // Use prepare/execute even for queries without parameters for consistency and potential future needs
+    // Query items that are currently stowed
+    // *** CORRECTED WHERE CLAUSE ***
     $sql = "SELECT
-                itemId, name, containerId, -- Changed id to itemId
+                itemId, name, containerId,
                 positionX, positionY, positionZ,
                 dimensionW, dimensionH, dimensionD,
                 placedDimensionW, placedDimensionH, placedDimensionD,
                 mass, status, expiryDate, remainingUses, preferredZone, lastUpdated
             FROM items
-            WHERE containerId IS NOT NULL AND positionX IS NOT NULL";
+            WHERE status = 'stowed'
+            ORDER BY containerId, itemId"; // Optional ordering
     $stmt = $db->prepare($sql);
     $stmt->execute();
 
     $inventory = [];
-    // Use fetchAll for simplicity if memory is not a concern for the expected inventory size
-    // $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    // foreach ($results as $row) { ... }
 
-    // Or keep the while loop for potentially very large inventories
+    // Loop through results and format them
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        // Rename itemId to id in the output JSON if frontend expects 'id'
-        $row['id'] = $row['itemId']; // Add this line if needed
-        // unset($row['itemId']); // Optional: remove original itemId field if frontend doesn't need it
+        // Optionally rename itemId to id if frontend expects 'id'
+        // $row['id'] = $row['itemId'];
+        // unset($row['itemId']);
 
         // Nest position data
         $row['position'] = [
-            // Cast to float/int if necessary for JSON type consistency
             'x' => isset($row['positionX']) ? (float)$row['positionX'] : null,
             'y' => isset($row['positionY']) ? (float)$row['positionY'] : null,
             'z' => isset($row['positionZ']) ? (float)$row['positionZ'] : null,
@@ -72,7 +58,7 @@ try {
         // Remove redundant top-level keys
         unset($row['positionX'], $row['positionY'], $row['positionZ']);
         unset($row['placedDimensionW'], $row['placedDimensionH'], $row['placedDimensionD']);
-        // Also optionally remove original dimensions if only placedDimensions are needed
+        // Optionally unset original dimensions if only placed are needed by frontend
         // unset($row['dimensionW'], $row['dimensionH'], $row['dimensionD']);
 
         $inventory[] = $row;
@@ -80,15 +66,20 @@ try {
 
     // Note: Content-Type header is already set by index.php
     http_response_code(200); // Explicitly set OK status
-    echo json_encode($inventory);
+
+    // --- MODIFICATION: Return consistent object structure ---
+    // It's generally better practice for APIs to return a consistent object envelope
+    echo json_encode(['success' => true, 'inventory' => $inventory]);
+    // --- END MODIFICATION ---
+    // Original might have been: echo json_encode($inventory);
 
 } catch (Exception $e) {
     // Note: Content-Type header is already set by index.php
     http_response_code(500); // Internal Server Error
     // Log the detailed error for the server admin
     error_log("inventory.php Error: " . $e->getMessage());
-    // Send a generic error message to the client
-    echo json_encode(['error' => 'Failed to fetch inventory data']);
+    // Send a generic error message to the client, including success:false
+    echo json_encode(['success' => false, 'error' => 'Failed to fetch inventory data']);
     exit; // Exit script execution after sending error
 } finally {
     // Close the connection
