@@ -1,83 +1,80 @@
-<?php // backend/init_db.php
+<?php // backend/init_db.php (Corrected Schema)
 
 // Define path to the SQLite database file
 $dbPath = __DIR__ . '/cargo_database.sqlite'; // Store DB in backend folder
 
 // --- Database Connection ---
 try {
-    // Create (connect to) the database file. If it doesn't exist, it will be created.
     $db = new PDO('sqlite:' . $dbPath);
-    // Set errormode to exceptions for easier error handling
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    // Enable foreign key constraints
     $db->exec('PRAGMA foreign_keys = ON;');
-
     echo "Database connection established successfully.\n";
-
 } catch (PDOException $e) {
-    // Handle connection error
     echo "Database Connection Error: " . $e->getMessage() . "\n";
-    exit(1); // Exit if connection fails
+    exit(1);
 }
 
 
 // --- CREATE TABLES ---
 try {
-    // Containers Table
+    // Containers Table (Keep as is - seems correct)
     $db->exec("
         CREATE TABLE IF NOT EXISTS containers (
-            containerId TEXT PRIMARY KEY, -- Unique identifier (e.g., 'contA')
-            zone TEXT NOT NULL,           -- Location zone (e.g., 'Crew Quarters')
-            width REAL NOT NULL,          -- Dimension (cm) along open face
-            depth REAL NOT NULL,          -- Dimension (cm) into container
-            height REAL NOT NULL,         -- Dimension (cm) vertical along open face
-            createdAt TEXT DEFAULT CURRENT_TIMESTAMP -- Track when added
+            containerId TEXT PRIMARY KEY,
+            zone TEXT NOT NULL,
+            width REAL NOT NULL,
+            depth REAL NOT NULL,
+            height REAL NOT NULL,
+            createdAt TEXT DEFAULT CURRENT_TIMESTAMP
         );
     ");
     echo "Table 'containers' created or already exists.\n";
 
-    // Items Table
+    // Items Table (MODIFIED SCHEMA)
     $db->exec("
         CREATE TABLE IF NOT EXISTS items (
-            itemId TEXT PRIMARY KEY,         -- Unique identifier (e.g., '001')
-            name TEXT NOT NULL,              -- Human-readable name
-            width REAL NOT NULL,             -- Item dimension (cm)
-            depth REAL NOT NULL,             -- Item dimension (cm)
-            height REAL NOT NULL,            -- Item dimension (cm)
-            mass REAL,                       -- Item mass (kg)
-            priority INTEGER NOT NULL CHECK(priority >= 0 AND priority <= 100), -- Priority (0-100)
-            expiryDate TEXT,                 -- Expiry date (ISO 8601 format: YYYY-MM-DD) or NULL
-            usageLimit INTEGER,              -- Max uses or NULL
-            remainingUses INTEGER,           -- Current uses left
-            preferredZone TEXT,              -- Suggested storage zone
-            status TEXT DEFAULT 'stowed',    -- 'stowed', 'waste_expired', 'waste_depleted'
-            createdAt TEXT DEFAULT CURRENT_TIMESTAMP, -- Track when added
+            itemId TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            dimensionW REAL NOT NULL,          -- CORRECTED: Base width dimension (internal)
+            dimensionD REAL NOT NULL,          -- CORRECTED: Base depth dimension (internal)
+            dimensionH REAL NOT NULL,          -- CORRECTED: Base height dimension (internal)
+            mass REAL,
+            priority INTEGER NOT NULL CHECK(priority >= 0 AND priority <= 100),
+            expiryDate TEXT,                 -- YYYY-MM-DD or NULL
+            usageLimit INTEGER,              -- NULL if unlimited
+            remainingUses INTEGER,           -- Initialized to usageLimit or NULL
+            preferredZone TEXT,
+            status TEXT DEFAULT 'available', -- CORRECTED: Default should be available for new items
+            createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+            lastUpdated TEXT DEFAULT CURRENT_TIMESTAMP, -- ADDED: Last updated timestamp
 
             -- Location Information (if currently stowed)
-            currentContainerId TEXT,         -- Which container it's in (NULL if not placed)
-            pos_w REAL,                      -- Position: Width coordinate of bottom-left-front corner
-            pos_d REAL,                      -- Position: Depth coordinate
-            pos_h REAL,                      -- Position: Height coordinate
+            containerId TEXT,                -- CORRECTED: Foreign key (NULL if not placed)
+            positionX REAL,                  -- CORRECTED: Position X coordinate (NULL if not placed)
+            positionY REAL,                  -- CORRECTED: Position Y coordinate (NULL if not placed)
+            positionZ REAL,                  -- CORRECTED: Position Z coordinate (NULL if not placed)
+            placedDimensionW REAL,           -- ADDED: Width dimension as placed (accounts for rotation)
+            placedDimensionD REAL,           -- ADDED: Depth dimension as placed
+            placedDimensionH REAL,           -- ADDED: Height dimension as placed
 
-            -- Define Foreign Key constraint
-            FOREIGN KEY (currentContainerId) REFERENCES containers(containerId)
-                ON DELETE SET NULL -- If container is deleted, item location becomes unknown
-                ON UPDATE CASCADE  -- If containerId changes, update here too
+            -- Foreign Key constraint
+            FOREIGN KEY (containerId) REFERENCES containers(containerId) -- CORRECTED: References 'containerId' column
+                ON DELETE SET NULL
+                ON UPDATE CASCADE
         );
     ");
-    echo "Table 'items' created or already exists.\n";
+    echo "Table 'items' created or already exists (Schema Updated).\n"; // Updated message
 
-     // Logs Table (for tracking actions)
+     // Logs Table (Keep as is - seems correct)
     $db->exec("
         CREATE TABLE IF NOT EXISTS logs (
-            logId INTEGER PRIMARY KEY AUTOINCREMENT, -- Unique log entry ID
-            timestamp TEXT DEFAULT CURRENT_TIMESTAMP, -- When the action occurred (ISO 8601)
-            userId TEXT,                             -- Identifier for the astronaut performing action (optional)
-            actionType TEXT NOT NULL,                -- 'placement', 'retrieval', 'rearrangement', 'disposal', 'import', 'simulation'
-            itemId TEXT,                             -- Item involved (if applicable)
-            detailsJson TEXT,                        -- JSON string with extra details (e.g., from/to container, coordinates, reason)
-
-            FOREIGN KEY (itemId) REFERENCES items(itemId) ON DELETE SET NULL -- Keep log even if item deleted
+            logId INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+            userId TEXT,
+            actionType TEXT NOT NULL,
+            itemId TEXT,
+            detailsJson TEXT,
+            FOREIGN KEY (itemId) REFERENCES items(itemId) ON DELETE SET NULL
         );
     ");
     echo "Table 'logs' created or already exists.\n";
@@ -90,7 +87,6 @@ try {
     exit(1);
 }
 
-// Close the connection (optional for script end, good practice in long running processes)
-$db = null;
+$db = null; // Close connection
 
 ?>

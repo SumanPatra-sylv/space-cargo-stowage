@@ -1,7 +1,4 @@
 containerId,zone,width,depth,height
-contA,Crew Quarters,100,85,200
-contB,Airlock,50,85,200
-contC,Laboratory,200,85,200
-contD,Storage Module,150,100,150
-contE,Medical Bay,80,60,100
-contF,Crew Quarters,100,85,50
+contG,ZoneAlpha,110,90,70
+contH,ZoneBeta,60,60,160
+contI,ZoneAlpha,80,85,100
