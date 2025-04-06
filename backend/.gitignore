@@ -1,6 +1,9 @@
-# Composer dependencies
+# Composer dependencies (if you were using Composer)
 vendor/
 
 # Database file
 *.db
 *.sqlite
+
+# Simulation state
+simulation_date.txt

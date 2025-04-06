@@ -1,7 +1,7 @@
-<?php // backend/import_items.php (Minimal Change Strategy Applied)
+<?php // backend/import_items.php (Modified with execute check & detailed logging)
 
-ini_set('display_errors', 0);
-ini_set('log_errors', 1);
+ini_set('display_errors', 0); // Keep errors internal
+ini_set('log_errors', 1);    // Log errors to server log
 error_reporting(E_ALL);
 
 // --- Response Structure ---
@@ -10,85 +10,60 @@ $response = [
     'message' => '',
     'insertedCount' => 0,
     'skippedCount' => 0,
-    'errors' => [] // <<< Initialize errors array here
+    'errors' => []
 ];
-$db = null; // Initialize $db
-$fileHandle = null; // Initialize $fileHandle
-$stmt = null; // Initialize $stmt
-$fileName = 'N/A'; // Initialize fileName for logging scope
+$db = null;
+$fileHandle = null;
+$stmt = null;
+$fileName = 'N/A';
 
 // --- Include Database ---
 require_once __DIR__ . '/database.php';
 
 // --- Check Request Method ---
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    $response['message'] = 'Invalid request method. Only POST is allowed.';
-    if (!headers_sent()) { header('Content-Type: application/json; charset=UTF-8'); } // Set header if not already set
-    echo json_encode($response);
-    exit;
+    http_response_code(405); $response['message'] = 'Invalid request method.'; echo json_encode($response); exit;
 }
 
 // --- File Upload Handling ---
 if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
     http_response_code(400);
     $uploadError = $_FILES['file']['error'] ?? 'No file uploaded';
-    $phpUploadErrors = [ /* ... map codes to messages ... */ ]; // Assuming you have this mapping elsewhere or handle directly
+    $phpUploadErrors = [ /* ... define error map if needed ... */ ];
     $response['message'] = $phpUploadErrors[$uploadError] ?? "File upload error code: ($uploadError)";
     error_log("Import Items API: File upload error: " . $response['message']);
-    if (!headers_sent()) { header('Content-Type: application/json; charset=UTF-8'); }
-    echo json_encode($response);
-    exit;
+    echo json_encode($response); exit;
 }
 
 $uploadedFile = $_FILES['file'];
 $csvFilePath = $uploadedFile['tmp_name'];
-$fileName = basename($uploadedFile['name']); // Get filename for logging
+$fileName = basename($uploadedFile['name'] ?? 'items_upload.csv'); // Use actual filename
 
-// Validate file type (Optional but recommended)
-if (function_exists('mime_content_type')) {
-    $fileType = mime_content_type($csvFilePath);
-    $allowedTypes = ['text/csv', 'text/plain', 'application/csv', 'application/vnd.ms-excel'];
-    if (!in_array(strtolower($fileType), $allowedTypes)) {
-        http_response_code(400);
-        $response['message'] = "Invalid file type. Only CSV files are allowed. Detected: " . $fileType;
-        error_log("Import Items API: Invalid file type: " . $fileType);
-        if (!headers_sent()) { header('Content-Type: application/json; charset=UTF-8'); }
-        echo json_encode($response);
-        exit;
-    }
-} else {
-    // Fallback: check extension if mime_content_type is unavailable
-    $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-    if ($fileExtension !== 'csv') {
-         http_response_code(400);
-         $response['message'] = "Invalid file extension. Only CSV files are allowed.";
-         error_log("Import Items API: Invalid file extension: " . $fileExtension);
-         if (!headers_sent()) { header('Content-Type: application/json; charset=UTF-8'); }
-         echo json_encode($response);
-         exit;
-    }
+// Optional but recommended file type check (using extension as fallback)
+$fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+if ($fileExtension !== 'csv') {
+     http_response_code(400); $response['message'] = "Invalid file extension. Only CSV files are allowed."; error_log("Import Items API: Invalid file extension: " . $fileExtension); echo json_encode($response); exit;
+}
+if (!file_exists($csvFilePath) || !is_readable($csvFilePath)) {
+    http_response_code(500); $response['message'] = 'Server error: Cannot read uploaded file.'; error_log("Cannot read uploaded file: $csvFilePath"); echo json_encode($response); exit;
 }
 
 
 // --- Database Processing ---
+$insertedCount = 0;
+$skippedCount = 0;
+$rowNumber = 0;
+$lastUpdated = date('Y-m-d H:i:s');
+
 try {
     $db = getDbConnection();
-    if ($db === null) {
-        throw new Exception("Database connection failed.", 503); // Throw to handle below
-    }
-
-    $insertedCount = 0;
-    $skippedCount = 0;
-    $rowNumber = 0; // Start at 0 to track file lines
-    // Removed local $errorMessages initialization, using $response['errors'] directly
+    if ($db === null) { throw new Exception("Database connection failed.", 503); }
+     error_log("Item Import: DB connection successful for $fileName.");
 
     $fileHandle = fopen($csvFilePath, 'r');
-    if (!$fileHandle) {
-        throw new Exception('Failed to open uploaded file for processing.', 500);
-    }
+    if (!$fileHandle) { throw new Exception('Failed to open uploaded file for processing.', 500); }
 
-    // Define SQL OUTSIDE the loop (as in your original)
+    // Define SQL (NULLs for placement fields)
     $sql = "INSERT INTO items (
                 itemId, name, dimensionW, dimensionD, dimensionH, mass, priority,
                 expiryDate, usageLimit, remainingUses, preferredZone,
@@ -102,196 +77,218 @@ try {
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL
             )";
 
-    // --- Read header row ---
-    $headerRow = fgetcsv($fileHandle, 0, ',', '"', '\\');
-    $rowNumber = 1; // We are now processing row 1 (header)
+    // Read header row
+    $headerRow = fgetcsv($fileHandle); // Defaults: , delimiter, " enclosure
+    $rowNumber = 1;
     if ($headerRow === false) { throw new Exception("Could not read header row (empty file?)."); }
-    // Optional: Add header column validation if needed
-    // --- End Header Read ---
+    $expectedCols = 10; // itemId, name, W, D, H, mass, priority, expiry, usage, zone
+    if (count($headerRow) < $expectedCols) { throw new Exception("Invalid CSV header. Expected at least $expectedCols columns, found " . count($headerRow)); }
+    // Optional: Validate specific header names here if desired
 
-    $db->beginTransaction(); // Start transaction AFTER opening file and reading header
+    $db->beginTransaction(); // Start transaction
+    error_log("Item Import: Transaction started for $fileName.");
 
-    $lastUpdated = date('Y-m-d H:i:s'); // Get timestamp once
+    $stmt = $db->prepare($sql); // Prepare statement once
 
-    while (($row = fgetcsv($fileHandle, 0, ',', '"', '\\')) !== false) {
+    while (($row = fgetcsv($fileHandle)) !== false) {
         $rowNumber++;
         if ($row === NULL || (count($row) === 1 && trim($row[0]) === '')) { continue; } // Skip empty lines
 
-        // Check column count matches expected CSV format
-        $expectedCols = 10;
         if (count($row) < $expectedCols) {
             $skippedCount++;
-            // <<< MODIFICATION: Add error directly to $response['errors'] >>>
             $response['errors'][] = ['row' => $rowNumber, 'message' => "Skipped: Incorrect column count (" . count($row) . " found, expected $expectedCols)."];
-            error_log("Import Items API: Row $rowNumber skipped - incorrect column count.");
+            error_log("Item Import [Row $rowNumber]: Skipped - incorrect column count.");
             continue;
         }
 
-        // Assign CSV data with null coalescing for safety
+        // Assign CSV data
         $itemId        = trim($row[0] ?? ''); $name          = trim($row[1] ?? '');
         $width         = trim($row[2] ?? ''); $depth         = trim($row[3] ?? '');
         $height        = trim($row[4] ?? ''); $mass          = trim($row[5] ?? '');
         $priority      = trim($row[6] ?? ''); $expiryDate    = trim($row[7] ?? '');
         $usageLimit    = trim($row[8] ?? ''); $preferredZone = trim($row[9] ?? '');
 
-        // --- Data Validation & Transformation ---
-        $isValid = true;
-        $validationErrors = []; // Collect errors for this specific row
+        // --- ADDED: Detailed Row Logging ---
+        error_log("Item Import [Row $rowNumber]: Processing ID=$itemId, Name=$name");
 
+        // --- Data Validation ---
+        $isValid = true;
+        $validationErrors = [];
         if (empty($itemId)) { $isValid = false; $validationErrors[] = "itemId cannot be empty."; }
         if (empty($name)) { $isValid = false; $validationErrors[] = "name cannot be empty."; }
-        if (!is_numeric($width) || $width <= 0) { $isValid = false; $validationErrors[] = "invalid width '$width'."; }
-        if (!is_numeric($depth) || $depth <= 0) { $isValid = false; $validationErrors[] = "invalid depth '$depth'."; }
-        if (!is_numeric($height) || $height <= 0) { $isValid = false; $validationErrors[] = "invalid height '$height'."; }
-        if (!is_numeric($mass) || $mass < 0) { $isValid = false; $validationErrors[] = "invalid mass '$mass'."; }
-        if (!is_numeric($priority) || $priority < 0 || $priority > 100) { $isValid = false; $validationErrors[] = "invalid priority '$priority' (0-100)."; }
+        // Robust numeric checks: allow floats for dimensions/mass, ints for priority/usage
+        if (!is_numeric($width) || (float)$width <= 0) { $isValid = false; $validationErrors[] = "invalid width '$width'."; }
+        if (!is_numeric($depth) || (float)$depth <= 0) { $isValid = false; $validationErrors[] = "invalid depth '$depth'."; }
+        if (!is_numeric($height) || (float)$height <= 0) { $isValid = false; $validationErrors[] = "invalid height '$height'."; }
+        if (!is_numeric($mass) || (float)$mass < 0) { $isValid = false; $validationErrors[] = "invalid mass '$mass'."; } // Allow 0 mass? Check reqs.
+        if (!is_numeric($priority) || !ctype_digit($priority) || (int)$priority < 0 || (int)$priority > 100) { $isValid = false; $validationErrors[] = "invalid priority '$priority' (0-100 integer)."; }
 
         $dbExpiryDate = null;
-        if (!empty($expiryDate) && strtolower($expiryDate) !== 'null' && strtolower($expiryDate) !== 'n/a') { // Also check n/a
-            $d = DateTime::createFromFormat('Y-m-d', $expiryDate);
-            if ($d && $d->format('Y-m-d') === $expiryDate) { $dbExpiryDate = $expiryDate; }
-            else { $isValid = false; $validationErrors[] = "invalid expiryDate format '$expiryDate' (Use YYYY-MM-DD or leave empty/NULL/N/A)."; }
+        if (!empty($expiryDate) && strtolower($expiryDate) !== 'null' && strtolower($expiryDate) !== 'n/a') {
+            try { // Use try-catch for date parsing
+                $d = new DateTime($expiryDate);
+                $dbExpiryDate = $d->format('Y-m-d'); // Format consistently
+            } catch (Exception $dateEx) {
+                 $isValid = false; $validationErrors[] = "invalid expiryDate '$expiryDate' (Use YYYY-MM-DD or leave empty/NULL/N/A).";
+            }
         }
 
         $dbUsageLimit = null; $dbRemainingUses = null;
-        if (!empty($usageLimit) && strtolower($usageLimit) !== 'null' && strtolower($usageLimit) !== 'n/a') { // Also check n/a
+        if (!empty($usageLimit) && strtolower($usageLimit) !== 'null' && strtolower($usageLimit) !== 'n/a') {
             if (!is_numeric($usageLimit) || !ctype_digit($usageLimit) || (int)$usageLimit < 0 ) {
                 $isValid = false; $validationErrors[] = "invalid usageLimit '$usageLimit' (Must be non-negative integer or leave empty/NULL/N/A).";
-            } else { $dbUsageLimit = (int)$usageLimit; $dbRemainingUses = $dbUsageLimit; }
+            } else { $dbUsageLimit = (int)$usageLimit; $dbRemainingUses = $dbUsageLimit; } // Set remaining uses initially
         }
 
-        $dbPreferredZone = (!empty($preferredZone) && strtolower($preferredZone) !== 'null' && strtolower($preferredZone) !== 'n/a') ? $preferredZone : null; // Also check n/a
-        $status = 'available'; // Default status - Changed from 'imported' in previous versions? Ensure this is correct.
+        $dbPreferredZone = (!empty($preferredZone) && strtolower($preferredZone) !== 'null' && strtolower($preferredZone) !== 'n/a') ? $preferredZone : null;
+        $status = 'available'; // Default status for new items
 
-        // Skip row if validation failed
         if (!$isValid) {
             $skippedCount++;
-            // <<< MODIFICATION: Add error directly to $response['errors'] >>>
-            $response['errors'][] = ['row' => $rowNumber, 'message' => "Skipped - Validation failed: " . implode('; ', $validationErrors)]; // Combine validation messages
-            error_log("Import Items API: Row $rowNumber validation failed for itemId ($itemId): " . implode('; ', $validationErrors));
-            continue; // Move to the next row
-        }
-
-        // --- MODIFICATION: Prepare statement INSIDE the loop (as in your original) ---
-        $stmt = $db->prepare($sql);
-        if (!$stmt) { // Add check if prepare failed
-             $skippedCount++;
-             $dbErrorMsg = $db->errorInfo()[2] ?? 'Unknown prepare error';
-             $response['errors'][] = ['row' => $rowNumber, 'message' => "Skipped - DB statement preparation failed: $dbErrorMsg"];
-             error_log("Import Items API: Row $rowNumber statement preparation failed for itemId ($itemId): $dbErrorMsg");
-             continue; // Skip this row if prepare fails
-        }
-        // --- END MODIFICATION ---
-
-        // --- Bind parameters and Execute ---
-        try {
-            $params = [
-                ':itemId'         => $itemId, ':name'           => $name,
-                ':dimW'           => (float)$width, ':dimD'           => (float)$depth, ':dimH'           => (float)$height,
-                ':mass'           => (float)$mass, ':priority'       => (int)$priority,
-                ':expiry'         => $dbExpiryDate, ':usageLimit'     => $dbUsageLimit, ':remainingUses'  => $dbRemainingUses,
-                ':prefZone'       => $dbPreferredZone, ':status'         => $status,
-                ':lastUpdated'    => $lastUpdated
-            ];
-
-            $stmt->execute($params);
-            $insertedCount++;
-
-        // <<< MODIFICATION: Simplified Catch Block >>>
-        } catch (PDOException $e) {
-            // Minimal handling: Log the error, record it for the response, and continue
-            $skippedCount++;
-            $errorMessage = $e->getMessage(); // Get the core error message
-            // Add error WITH row number to the main response array directly
-            $response['errors'][] = ['row' => $rowNumber, 'message' => "Skipped - DB error: " . $errorMessage];
-            error_log("Import Items API: Row $rowNumber DB error for itemId '$itemId': " . $errorMessage);
-            // Explicitly continue to the next iteration of the while loop
+            $combinedErrorMessage = implode('; ', $validationErrors);
+            $response['errors'][] = ['row' => $rowNumber, 'message' => "Skipped - Validation failed: " . $combinedErrorMessage];
+            error_log("Item Import [Row $rowNumber]: Validation failed for ID ($itemId): " . $combinedErrorMessage);
             continue;
         }
-        // <<< END MODIFICATION >>>
+
+        // --- Bind parameters and Execute (using array for execute) ---
+        $params = [
+            ':itemId'         => $itemId, ':name'           => $name,
+            ':dimW'           => (float)$width, ':dimD'           => (float)$depth, ':dimH'           => (float)$height,
+            ':mass'           => (float)$mass, ':priority'       => (int)$priority,
+            ':expiry'         => $dbExpiryDate, ':usageLimit'     => $dbUsageLimit, ':remainingUses'  => $dbRemainingUses,
+            ':prefZone'       => $dbPreferredZone, ':status'         => $status,
+            ':lastUpdated'    => $lastUpdated
+        ];
+
+        // --- ADDED: Explicit Execute Check ---
+        try {
+            if ($stmt->execute($params)) {
+                $insertedCount++;
+                 error_log("Item Import [Row $rowNumber]: Successfully executed INSERT for ID=$itemId.");
+            } else {
+                // This else block might not be reached if PDO throws exception on failure
+                $errorInfo = $stmt->errorInfo();
+                $errorMessage = "DB Execute Failed: " . ($errorInfo[2] ?? 'Unknown Error');
+                 error_log("Item Import [Row $rowNumber]: FAILED DB execute (returned false) for ID=$itemId. Error: $errorMessage");
+                // Throw exception to ensure rollback on non-exception failure
+                 throw new Exception("Database execution failed (returned false) for row $rowNumber.");
+            }
+        } catch (PDOException $e) {
+             // Catch PDO exceptions (like UNIQUE constraint) during execute
+             $skippedCount++;
+             $errorMessage = $e->getMessage();
+             $response['errors'][] = ['row' => $rowNumber, 'message' => "Skipped - DB error: " . $errorMessage];
+             error_log("Item Import [Row $rowNumber]: DB PDOException for ID '$itemId': " . $errorMessage);
+             // Throw again to trigger transaction rollback
+             throw $e; // Re-throw the original PDOException
+        }
+        // --- END Explicit Execute Check ---
 
     } // End while loop
 
     fclose($fileHandle); $fileHandle = null;
 
-    // Commit the transaction
+    // Commit the transaction IF NO EXCEPTIONS WERE THROWN
     if ($db->inTransaction()) {
         $db->commit();
-        $response['success'] = true; // Mark as success even if some rows were skipped
+        $response['success'] = true;
         $response['message'] = "Item import finished. Inserted: $insertedCount, Skipped: $skippedCount.";
-         if (count($response['errors']) > 0) {
-             $response['message'] .= " Some rows had errors."; // Add nuance
-         }
+         if (count($response['errors']) > 0) { $response['message'] .= " Some rows had errors."; }
         http_response_code(200);
-        error_log("Import Items API: Committed. Inserted: $insertedCount, Skipped: $skippedCount.");
+        error_log("Item Import: Committed. Inserted: $insertedCount, Skipped: $skippedCount for $fileName.");
     } else {
-         $response['message'] = "Item import finished, but transaction commit state unclear. Inserted: $insertedCount, Skipped: $skippedCount.";
-         $response['success'] = ($insertedCount > 0 || $skippedCount > 0);
-         http_response_code($response['success'] ? 200 : 500);
-         error_log("Import Items API: Finished with no active transaction. Inserted: $insertedCount, Skipped: $skippedCount.");
+        // This state implies rollback occurred due to an exception
+         error_log("Item Import: Finished, but transaction was not active (likely rolled back) for $fileName.");
+         // Success remains false unless explicitly set true on commit
+         if (empty($response['message'])) {
+             $response['message'] = "Item import failed or finished with errors. Inserted: $insertedCount, Skipped: $skippedCount.";
+         }
+         http_response_code( $insertedCount > 0 ? 207 : 400 ); // Multi-Status if partial, Bad Request if all failed/skipped
     }
 
-} catch (Exception $e) {
-    // Catch general exceptions
-    if ($db !== null && $db->inTransaction()) { $db->rollBack(); error_log("Import Items API: Transaction rolled back."); }
+} catch (PDOException $e) { // Catch re-thrown PDOExceptions or initial connection/prepare errors
+    if ($db && $db->inTransaction()) { $db->rollBack(); error_log("Item Import: Rolled back transaction due to PDOException in outer block."); }
+    http_response_code(400); // Bad Request (usually duplicate ID) or 500
+    $response['success'] = false;
+    $insertedCount = 0; // Reset count
+    $errorCode = $e->errorInfo[1] ?? $e->getCode();
+    $errorMessage = $e->getMessage();
+    if ($errorCode === 19 || stripos($errorMessage, 'UNIQUE constraint') !== false) {
+        $response['message'] = "Import failed: Duplicate Item ID encountered near row $rowNumber. Rolled back.";
+        // Error might already be in array from inner catch, but add generic if needed
+        if (empty(array_filter($response['errors'], fn($err) => $err['row'] === $rowNumber))) {
+             $response['errors'][] = ['row' => $rowNumber, 'message' => "Duplicate ID constraint violated."];
+        }
+         error_log("Item Import Outer PDOException (Row $rowNumber) - Duplicate ID. " . $errorMessage);
+    } else {
+        $response['message'] = "Database error occurred near row $rowNumber. Import failed and rolled back.";
+         if (empty(array_filter($response['errors'], fn($err) => $err['row'] === $rowNumber))) {
+            $response['errors'][] = ['row' => $rowNumber, 'message' => "DB Error [$errorCode]: " . $errorMessage];
+         }
+        error_log("Item Import Outer PDOException (Row $rowNumber): [$errorCode] " . $errorMessage);
+    }
+
+} catch (Exception $e) { // Catch general exceptions (file open, header error, execute check failure etc.)
+    if ($db && $db->inTransaction()) { $db->rollBack(); error_log("Item Import: Rolled back transaction due to general Exception."); }
     $statusCode = ($e->getCode() >= 400 && $e->getCode() < 600) ? $e->getCode() : 500;
     http_response_code($statusCode);
-    $response['message'] = 'An error occurred during import: ' . $e->getMessage();
     $response['success'] = false;
-    error_log("Import Items API: Exception: " . $e->getMessage());
-    if (isset($fileHandle) && is_resource($fileHandle)) { fclose($fileHandle); }
+    $insertedCount = 0;
+    $response['message'] = 'An error occurred during import: ' . $e->getMessage();
+    if (empty(array_filter($response['errors'], fn($err) => $err['row'] === $rowNumber))) {
+         $response['errors'][] = ['row' => $rowNumber, 'message' => $e->getMessage()];
+    }
+    error_log("Item Import Exception (Row $rowNumber): " . $e->getMessage());
 
 } finally {
-    $db = null; // Close DB connection
-    if (isset($fileHandle) && is_resource($fileHandle)) { fclose($fileHandle); } // Ensure handle closed
-    $stmt = null; // Release statement handle
+    // Ensure file handle is closed
+    if (isset($fileHandle) && $fileHandle && is_resource($fileHandle)) { fclose($fileHandle); }
+    $stmt = null; // Release statement
+    // DB connection closed in logging block or here if logging fails
 }
 
-$response['insertedCount'] = $insertedCount ?? 0; // Ensure counts are set
-$response['skippedCount'] = $skippedCount ?? 0;
-// $response['errors'] is already populated directly
+// Finalize counts for response
+$response['insertedCount'] = $insertedCount;
+$response['skippedCount'] = $skippedCount;
 
-// --- <<< ADDED LOGGING BLOCK >>> ---
-// --- Perform Logging AFTER response is fully finalized ---
+// --- Logging Block ---
 try {
-    // Re-establish connection if necessary, or use existing if still valid (depends on error handling)
-    // Simplified: assume connection needs re-establishing if db is null after main try-catch
-    if ($db === null) { $db = getDbConnection(); } // Attempt reconnect for logging
+    if ($db === null) { $db = getDbConnection(); } // Attempt reconnect for logging if needed
 
-    if ($db) { // Check DB connection is valid before logging
+    if ($db) {
         $logSql = "INSERT INTO logs (userId, actionType, detailsJson, timestamp) VALUES (:userId, :actionType, :details, :timestamp)";
         $logStmt = $db->prepare($logSql);
-        // Build final details for logging
         $logDetails = [
-            'importType' => 'items', // Indicate item import
-            'fileName' => $fileName, // Use filename captured earlier
-            'success' => $response['success'], // Use final success status
-            'insertedCount' => $response['insertedCount'], // Use final count
-            'skippedCount' => $response['skippedCount'], // Use final count
-            'errors' => $response['errors'], // Log collected errors (now directly from response)
-            'finalMessage' => $response['message'] // Use final message
+            'importType' => 'items',
+            'fileName' => $fileName,
+            'success' => $response['success'],
+            'insertedCount' => $response['insertedCount'],
+            'skippedCount' => $response['skippedCount'],
+            'errors' => $response['errors'],
+            'finalMessage' => $response['message']
         ];
         $logParams = [
             ':userId' => 'System_Import',
-            ':actionType' => 'import_items', // Correct action type
+            ':actionType' => 'import_items',
             ':details' => json_encode($logDetails),
-            ':timestamp' => date('Y-m-d H:i:s')
+            ':timestamp' => $lastUpdated // Use timestamp from start of process
         ];
         $logStmt->execute($logParams);
-        error_log("Item import action logged correctly.");
+        error_log("Item import action logged.");
     } else {
          error_log("CRITICAL: Cannot log item import action! DB connection unavailable.");
     }
 } catch (Exception $logEx) {
      error_log("CRITICAL: Failed to log item import action! Error: " . $logEx->getMessage());
 } finally {
-    $db = null; // Ensure DB connection used for logging is closed
+     $db = null; // Ensure logging DB handle is closed
 }
-// --- END LOGGING ---
+// --- END Logging ---
 
 // Send final JSON response
 if (!headers_sent()) { header('Content-Type: application/json; charset=UTF-8'); }
 echo json_encode($response);
-exit(); // Explicitly exit after sending response
+exit();
 
 ?>
