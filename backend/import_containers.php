@@ -97,8 +97,8 @@ try {
         }
 
         // Assign to bound variables (trim data)
-        $containerId = trim($data[0]);
-        $zone = trim($data[1]);
+        $zone = trim($data[0]);
+        $containerId = trim($data[1]);
         $width = trim($data[2]);
         $depth = trim($data[3]);
         $height = trim($data[4]);
