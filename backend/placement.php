@@ -1,9 +1,9 @@
 <?php
-// --- File: backend/placement.php (Surface Heuristic - Best Fit - V7 - Priority Rearrangement - Revised Trigger) ---
-ini_set('max_execution_time', 300); // Consider increasing if rearrangements are complex
-ini_set('display_errors', 0);      // Disable displaying errors to the user
-ini_set('log_errors', 1);         // Enable logging errors
-error_reporting(E_ALL);          // Report all errors for logging
+// --- File: backend/placement.php (V10 - Refinement Swap Pass) ---
+ini_set('max_execution_time', 360); // Increased slightly for refinement pass
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+error_reporting(E_ALL);
 
 require_once __DIR__ . '/database.php';
 
@@ -12,30 +12,29 @@ require_once __DIR__ . '/database.php';
 // #########################################################################
 
 define('DB_DATETIME_FORMAT', 'Y-m-d H:i:s');
-define('PLACEMENT_ALGORITHM_NAME', 'SurfaceHeuristic_BestFit_PriorityRearrange_V7_RevisedTrigger'); // Updated name slightly
+define('PLACEMENT_ALGORITHM_NAME', 'SurfaceHeuristic_BestFit_V10_RefineSwap'); // Updated name
 
-// --- Priority & Rearrangement Config ---
-define('HIGH_PRIORITY_THRESHOLD', 80);    // Items with priority >= this trigger rearrangement if needed for preferred spot
-define('LOW_PRIORITY_THRESHOLD', 50);     // Items with priority <= this are candidates for being moved during rearrangement
+// --- Priority Tiers ---
+define('HIGH_PRIORITY_THRESHOLD', 80);
+define('LOW_PRIORITY_THRESHOLD', 50);
 
 // --- Scoring Config ---
-define('PREFERRED_ZONE_SCORE_PENALTY', 1000000000.0); // Huge penalty for placing outside preferred zone/container (applied during cross-container comparison)
-define('ACCESSIBILITY_SCORE_WEIGHT_Y', 1000000.0);   // Weight for Y coordinate (Depth - Lower is better)
-define('ACCESSIBILITY_SCORE_WEIGHT_Z', 1000.0);      // Weight for Z coordinate (Height - Lower is better)
-define('ACCESSIBILITY_SCORE_WEIGHT_X', 1.0);         // Weight for X coordinate (Width - Lower is better)
+define('PREFERRED_ZONE_SCORE_PENALTY', 1000000000.0);
+define('ACCESSIBILITY_SCORE_WEIGHT_Y', 1000000.0);
+define('ACCESSIBILITY_SCORE_WEIGHT_Z', 1000.0);
+define('ACCESSIBILITY_SCORE_WEIGHT_X', 1.0);
 
 // --- Other Constants ---
-define('FLOAT_EPSILON', 0.001);      // Small value for float comparisons
-define('POSITION_EPSILON', 0.1);     // How close coordinates need to be to be considered the "same" position (e.g., for avoiding original spot)
+define('FLOAT_EPSILON', 0.001);
+define('POSITION_EPSILON', 0.1);
 
 // #########################################################################
-// ## START: Helper Functions                                            ##
+// ## START: Core Helper Functions (Includes existing + new helpers)      ##
 // #########################################################################
 
-/**
- * Generates unique possible orientations for an item.
- */
+// --- generateOrientations(...) - Unchanged ---
 function generateOrientations(array $dimensions): array {
+    // ... (same as V9) ...
     $width = (float)($dimensions['width'] ?? 0);
     $depth = (float)($dimensions['depth'] ?? 0);
     $height = (float)($dimensions['height'] ?? 0);
@@ -55,10 +54,9 @@ function generateOrientations(array $dimensions): array {
     return array_values($orientationsMap);
 }
 
-/**
- * Checks if two 3D boxes overlap, using an epsilon for float comparisons.
- */
+// --- boxesOverlap(...) - Unchanged ---
 function boxesOverlap(array $box1, array $box2): bool {
+    // ... (same as V9) ...
     $x1 = (float)($box1['x'] ?? 0); $y1 = (float)($box1['y'] ?? 0); $z1 = (float)($box1['z'] ?? 0);
     $w1 = (float)($box1['w'] ?? 0); $d1 = (float)($box1['d'] ?? 0); $h1 = (float)($box1['h'] ?? 0);
     $x2 = (float)($box2['x'] ?? 0); $y2 = (float)($box2['y'] ?? 0); $z2 = (float)($box2['z'] ?? 0);
@@ -69,29 +67,15 @@ function boxesOverlap(array $box1, array $box2): bool {
     return !($noOverlapX || $noOverlapY || $noOverlapZ);
 }
 
-/**
- * Finds the best available position for an item IN A SPECIFIC CONTAINER using a surface
- * placement heuristic. Prioritizes placement closest to the open face (min Y),
- * then bottom (min Z), then left (min X). Includes point generation behind items.
- * (Standard placement function - checks ONE container)
- *
- * @param string $itemId The ID of the item being placed (for logging).
- * @param array $itemDimensionsApi Dimensions of the item {'width', 'depth', 'height'}.
- * @param int $itemPriority Priority of the item being placed.
- * @param string $containerId ID of the container being checked.
- * @param array $containerDimensionsApi Dimensions of the container.
- * @param array $existingItems Items already placed in this specific container.
- * @return ?array Best placement found {'foundX', ..., 'score' (geometric score)} or null.
- */
-function findSpaceForItem(string $itemId, array $itemDimensionsApi, int $itemPriority, string $containerId, array $containerDimensionsApi, array $existingItems): ?array
-{
-    $orientations = generateOrientations($itemDimensionsApi);
+// --- findSpaceForItem(...) - Unchanged ---
+function findSpaceForItem(string $itemId, array $itemDimensionsApi, int $itemPriority, string $containerId, array $containerDimensionsApi, array $existingItems): ?array {
+    // ... (same as V9) ...
+     $orientations = generateOrientations($itemDimensionsApi);
     if (empty($orientations)) { return null; }
     $bestPlacement = null; $bestScore = null;
     $containerW = (float)($containerDimensionsApi['width'] ?? 0); $containerD = (float)($containerDimensionsApi['depth'] ?? 0); $containerH = (float)($containerDimensionsApi['height'] ?? 0);
     if ($containerW <= 0 || $containerD <= 0 || $containerH <= 0) { return null; }
 
-    // --- Candidate Point Generation ---
     $candidatePoints = []; $originKey = sprintf("%.3f_%.3f_%.3f", 0.0, 0.0, 0.0); $candidatePoints[$originKey] = ['x' => 0.0, 'y' => 0.0, 'z' => 0.0];
     foreach ($existingItems as $existing) {
         $ex = (float)($existing['x'] ?? 0); $ey = (float)($existing['y'] ?? 0); $ez = (float)($existing['z'] ?? 0);
@@ -109,7 +93,6 @@ function findSpaceForItem(string $itemId, array $itemDimensionsApi, int $itemPri
          }
     } $candidatePoints = array_values($candidatePoints);
 
-    // --- Loop through Orientations and Candidate Points ---
     foreach ($orientations as $orientation) {
         $itemW = (float)$orientation['width']; $itemD = (float)$orientation['depth']; $itemH = (float)$orientation['height'];
         if ($itemW > $containerW + FLOAT_EPSILON || $itemD > $containerD + FLOAT_EPSILON || $itemH > $containerH + FLOAT_EPSILON) continue;
@@ -122,9 +105,7 @@ function findSpaceForItem(string $itemId, array $itemDimensionsApi, int $itemPri
             $hasCollision = false; foreach ($existingItems as $existingItem) { if (boxesOverlap($potentialPlacement, $existingItem)) { $hasCollision = true; break; } }
 
             if (!$hasCollision) {
-                // Geometric Score: Prioritize Min Y, then Min Z, then Min X
                 $currentScore = ($y * ACCESSIBILITY_SCORE_WEIGHT_Y) + ($z * ACCESSIBILITY_SCORE_WEIGHT_Z) + ($x * ACCESSIBILITY_SCORE_WEIGHT_X);
-
                 if ($bestScore === null || $currentScore < $bestScore) {
                     $bestScore = $currentScore;
                     $bestPlacement = ['foundX' => $x, 'foundY' => $y, 'foundZ' => $z, 'placedW' => $itemW, 'placedD' => $itemD, 'placedH' => $itemH, 'score' => $bestScore];
@@ -135,76 +116,36 @@ function findSpaceForItem(string $itemId, array $itemDimensionsApi, int $itemPri
     return $bestPlacement;
 }
 
+// --- findBestRelocationSpot(...) - Unchanged ---
+function findBestRelocationSpot(/* ... */): ?array {
+    // ... (same as V9) ...
+    // Note: This function is used during rearrangement, not during the refinement swap pass.
+     $itemToMoveId = func_get_arg(0); $itemDimensions = func_get_arg(1);
+     $originalContainerId = func_get_arg(2); $originalPosition = func_get_arg(3);
+     $allContainerDimensions = func_get_arg(4); $itemsMasterList = func_get_arg(5);
+     $currentPlacementState = func_get_arg(6); $highPriorityItemId = func_get_arg(7);
+     $idealSpotToClear = func_get_arg(8);
 
-/**
- * Finds the best place to RELOCATE a low-priority item, avoiding its original spot
- * and the ideal spot being cleared for a high-priority item. Prioritizes less
- * desirable locations implicitly via container search order. Returns the *first* valid spot found.
- *
- * @param string $itemToMoveId ID of the low-priority item being moved.
- * @param array $itemDimensions Original dimensions of the item to move.
- * @param string $originalContainerId The container the item is currently in.
- * @param array $originalPosition The item's current position data {'x','y','z','w','d','h'}.
- * @param array $allContainerDimensions Map of all containers.
- * @param array $itemsMasterList Master list for priorities.
- * @param array $currentPlacementState The *current*, potentially modified, placement state during rearrangement.
- * @param string $highPriorityItemId ID of the item we're making space for.
- * @param array $idealSpotToClear Coordinates {'x','y','z','w','d','h'} of the spot being cleared in the original container.
- *
- * @return ?array Best relocation spot {'containerId', 'foundX', ...} or null.
- */
-function findBestRelocationSpot(
-    string $itemToMoveId, array $itemDimensions,
-    string $originalContainerId, array $originalPosition,
-    array $allContainerDimensions, array $itemsMasterList,
-    array $currentPlacementState,
-    string $highPriorityItemId, array $idealSpotToClear
-): ?array {
-
-    $orientations = generateOrientations($itemDimensions);
+     $orientations = generateOrientations($itemDimensions);
     if (empty($orientations)) return null;
-
-    // Define search order: Prioritize keeping in same container, then less preferred zones.
     $containerSearchOrder = [];
-    // 1. Same container (if valid)
-    if (isset($allContainerDimensions[$originalContainerId])) {
-        $containerSearchOrder[$originalContainerId] = $allContainerDimensions[$originalContainerId];
-    }
-    // 2. Containers in less preferred zones
-    $originalZone = $allContainerDimensions[$originalContainerId]['zone'] ?? 'UnknownZone_Reloc';
-    foreach($allContainerDimensions as $cId => $cData) {
-        if ($cId === $originalContainerId) continue; // Already added
-        $zone = $cData['zone'] ?? 'UnknownZone_Reloc';
-        // Define "less preferred" - for now, any zone that is NOT the original zone
-        if ($zone !== $originalZone) {
-             if (!isset($containerSearchOrder[$cId])) $containerSearchOrder[$cId] = $cData;
-        }
-    }
-    // 3. Any remaining containers (including others in the original zone)
-     foreach($allContainerDimensions as $cId => $cData) {
-         if (!isset($containerSearchOrder[$cId])) { // If not already added
-              $containerSearchOrder[$cId] = $cData;
-         }
-     }
+    if (isset($allContainerDimensions[$originalContainerId])) { $containerSearchOrder[$originalContainerId] = $allContainerDimensions[$originalContainerId]; }
+    // Add others
+    foreach($allContainerDimensions as $cId => $cData) { if ($cId !== $originalContainerId && !isset($containerSearchOrder[$cId])) { $containerSearchOrder[$cId] = $cData; } }
 
-    // --- Search through containers in the defined order ---
+
     foreach ($containerSearchOrder as $containerId => $containerDims) {
-        $itemsInThisContainer = $currentPlacementState[$containerId] ?? [];
+        $itemsInThisContainer = [];
+        if (isset($currentPlacementState[$containerId])) { foreach ($currentPlacementState[$containerId] as $item) { if ($item['id'] !== $itemToMoveId) { $itemsInThisContainer[] = $item; } } }
         $containerW = (float)$containerDims['width']; $containerD = (float)$containerDims['depth']; $containerH = (float)$containerDims['height'];
         if ($containerW <= 0 || $containerD <= 0 || $containerH <= 0) continue;
 
-        // Generate Candidate Points for this container
+        $bestPlacementInContainer = null; $bestScoreInContainer = null;
         $candidatePoints = []; $originKey = sprintf("%.3f_%.3f_%.3f", 0.0, 0.0, 0.0); $candidatePoints[$originKey] = ['x' => 0.0, 'y' => 0.0, 'z' => 0.0];
         foreach ($itemsInThisContainer as $existing) {
-             // We might be checking a state where the item to move *hasn't* been removed yet. Skip self.
-             if ($existing['id'] === $itemToMoveId) continue;
              $ex = (float)($existing['x'] ?? 0); $ey = (float)($existing['y'] ?? 0); $ez = (float)($existing['z'] ?? 0);
              $ew = (float)($existing['w'] ?? 0); $ed = (float)($existing['d'] ?? 0); $eh = (float)($existing['h'] ?? 0);
-             $pointsToAdd = [
-                 ['x' => $ex,       'y' => $ey,       'z' => $ez + $eh], // Top
-                 ['x' => $ex + $ew, 'y' => $ey,       'z' => $ez],       // Right
-                 ['x' => $ex,       'y' => $ey + $ed, 'z' => $ez]        // Behind
-             ];
+             $pointsToAdd = [ ['x' => $ex, 'y' => $ey, 'z' => $ez + $eh],['x' => $ex + $ew, 'y' => $ey, 'z' => $ez],['x' => $ex, 'y' => $ey + $ed, 'z' => $ez] ];
               foreach ($pointsToAdd as $pt) {
                   if ($pt['x'] < $containerW + FLOAT_EPSILON && $pt['y'] < $containerD + FLOAT_EPSILON && $pt['z'] < $containerH + FLOAT_EPSILON) {
                       $key = sprintf("%.3f_%.3f_%.3f", round($pt['x'], 3), round($pt['y'], 3), round($pt['z'], 3));
@@ -213,7 +154,6 @@ function findBestRelocationSpot(
               }
         } $candidatePoints = array_values($candidatePoints);
 
-        // Check Orientations at Candidate Points in this container
         foreach ($orientations as $orientation) {
             $itemW = (float)$orientation['width']; $itemD = (float)$orientation['depth']; $itemH = (float)$orientation['height'];
             if ($itemW > $containerW + FLOAT_EPSILON || $itemD > $containerD + FLOAT_EPSILON || $itemH > $containerH + FLOAT_EPSILON) continue;
@@ -221,345 +161,484 @@ function findBestRelocationSpot(
             foreach ($candidatePoints as $point) {
                 $x = (float)$point['x']; $y = (float)$point['y']; $z = (float)$point['z'];
                 if (($x + $itemW > $containerW + FLOAT_EPSILON) || ($y + $itemD > $containerD + FLOAT_EPSILON) || ($z + $itemH > $containerH + FLOAT_EPSILON)) continue;
-
                 $potentialPlacement = ['id' => $itemToMoveId, 'x' => $x, 'y' => $y, 'z' => $z, 'w' => $itemW, 'd' => $itemD, 'h' => $itemH];
-
-                // A. Check Collision with other items in this container
-                $hasCollision = false;
-                 foreach ($itemsInThisContainer as $existingItem) {
-                      if ($existingItem['id'] === $itemToMoveId) continue; // Skip self check
-                      if (boxesOverlap($potentialPlacement, $existingItem)) { $hasCollision = true; break; }
-                 }
+                $hasCollision = false; foreach ($itemsInThisContainer as $existingItem) { if (boxesOverlap($potentialPlacement, $existingItem)) { $hasCollision = true; break; } }
                  if ($hasCollision) continue;
-
-                 // B. Check: Avoid Original Position (only if checking the original container)
-                 $isOriginalPos = false;
-                 if ($containerId === $originalContainerId &&
-                    abs($x - (float)$originalPosition['x']) < POSITION_EPSILON &&
-                    abs($y - (float)$originalPosition['y']) < POSITION_EPSILON &&
-                    abs($z - (float)$originalPosition['z']) < POSITION_EPSILON) {
-                     $isOriginalPos = true;
-                 }
+                 $isOriginalPos = false; if ($containerId === $originalContainerId) { if (abs($x - (float)$originalPosition['x']) < POSITION_EPSILON && abs($y - (float)$originalPosition['y']) < POSITION_EPSILON && abs($z - (float)$originalPosition['z']) < POSITION_EPSILON) { $isOriginalPos = true; } }
                  if ($isOriginalPos) continue;
-
-                 // C. Check: Avoid the Ideal Spot being cleared (only if checking the original container)
-                 $isIdealSpot = false;
-                 if ($containerId === $originalContainerId) {
-                     // Check overlap between the potential *relocation* spot for the blocker
-                     // and the *ideal spot* we want for the high-priority item.
-                     if (boxesOverlap($potentialPlacement, $idealSpotToClear)) {
-                         $isIdealSpot = true;
-                     }
-                 }
+                 $isIdealSpot = false; if ($containerId === $originalContainerId) { if (boxesOverlap($potentialPlacement, $idealSpotToClear)) { $isIdealSpot = true; } }
                  if ($isIdealSpot) continue;
 
-                // *** Valid Relocation Spot Found ***
-                // Since we iterate containers in order of preference (same -> less pref -> other),
-                // and points/orientations within are checked systematically,
-                // the *first* valid spot we find is our chosen relocation spot.
-                 error_log("findBestRelocationSpot: Found valid spot for $itemToMoveId in $containerId at (Y=$y, Z=$z, X=$x)");
-                 return [
-                     'containerId' => $containerId,
-                     'foundX' => $x, 'foundY' => $y, 'foundZ' => $z,
-                     'placedW' => $itemW, 'placedD' => $itemD, 'placedH' => $itemH
-                 ];
-
-            } // End point loop
-        } // End orientation loop
-    } // End container loop
-
-    // If entire search completes, no suitable relocation spot found
+                 $currentScore = ($y * ACCESSIBILITY_SCORE_WEIGHT_Y) + ($z * ACCESSIBILITY_SCORE_WEIGHT_Z) + ($x * ACCESSIBILITY_SCORE_WEIGHT_X);
+                 if ($bestScoreInContainer === null || $currentScore < $bestScoreInContainer) {
+                     $bestScoreInContainer = $currentScore;
+                     $bestPlacementInContainer = ['containerId' => $containerId, 'foundX' => $x, 'foundY' => $y, 'foundZ' => $z, 'placedW' => $itemW, 'placedD' => $itemD, 'placedH' => $itemH ];
+                 }
+            }
+        }
+        if ($bestPlacementInContainer !== null) {
+            error_log("findBestRelocationSpot: Found valid spot for $itemToMoveId in $containerId at (Y={$bestPlacementInContainer['foundY']}, Z={$bestPlacementInContainer['foundZ']}, X={$bestPlacementInContainer['foundX']})");
+            return $bestPlacementInContainer;
+        }
+    }
     error_log("findBestRelocationSpot: Could not find any valid relocation spot for $itemToMoveId.");
     return null;
 }
 
+// --- attemptRearrangementForHighPriorityItem(...) - Unchanged ---
+function attemptRearrangementForHighPriorityItem(/* ... */): array {
+    // ... (same as V9) ...
+    $itemIdToPlace = func_get_arg(0); $itemDimensionsApi = func_get_arg(1); $itemPriority = func_get_arg(2);
+    $preferredContainerId = func_get_arg(3); $preferredZone = func_get_arg(4); $allContainerDimensions = func_get_arg(5);
+    $currentPlacementState = func_get_arg(6); $itemsMasterList = func_get_arg(7); $stepCounter = func_get_arg(8);
 
-/**
- * Attempts to make space for a high-priority item by rearranging low-priority items.
- * Returns the required moves, final placement, and updated state if successful.
- *
- * @param string $itemIdToPlace The high-priority item needing placement.
- * @param array $itemDimensionsApi Dimensions of the item to place.
- * @param int $itemPriority Priority of the item to place (assumed HIGH).
- * @param ?string $preferredContainerId Specific preferred container, if any.
- * @param ?string $preferredZone Preferred zone, if any.
- * @param array $allContainerDimensions Map of all container dimensions and zones.
- * @param array $currentPlacementState Current state of all placed items across containers.
- * @param array $itemsMasterList Master list with priorities and original dimensions.
- * @param int $stepCounter Current step number for rearrangement logging.
- *
- * @return array Result structure: ['success', 'reason', 'moves', 'finalPlacement', 'newState', 'nextStep']
- */
-function attemptRearrangementForHighPriorityItem(
-    string $itemIdToPlace, array $itemDimensionsApi, int $itemPriority,
-    ?string $preferredContainerId, ?string $preferredZone,
-    array $allContainerDimensions, array $currentPlacementState,
-    array $itemsMasterList, int $stepCounter
-): array {
+    error_log("Rearrange Triggered for $itemIdToPlace (Prio: $itemPriority, PrefCont: ".($preferredContainerId ?? 'None').", PrefZone: ".($preferredZone ?? 'None').")");
+    $rearrangementMoves = []; $tempPlacementState = $currentPlacementState;
+    $targetContainerIds = []; $targetZone = null; $foundInZone = false;
 
-    error_log("Rearrange Triggered for $itemIdToPlace (Prio: $itemPriority)");
-    $rearrangementMoves = [];
-    $tempPlacementState = $currentPlacementState; // IMPORTANT: Work on a deep copy if modifying nested arrays directly
-                                                   // PHP arrays are copy-on-write, but nested modifications can be tricky.
-                                                   // For this structure, direct modification should be okay, but be mindful.
-
-    // 1. Identify Target Containers (Prefer specific, then zone, else fail)
-    $targetContainerIds = [];
     if ($preferredContainerId !== null && isset($allContainerDimensions[$preferredContainerId])) {
-        $targetContainerIds[] = $preferredContainerId;
+        $targetContainerIds[] = $preferredContainerId; $targetZone = $allContainerDimensions[$preferredContainerId]['zone'] ?? null;
     } elseif ($preferredZone !== null) {
-        foreach ($allContainerDimensions as $cId => $cData) {
-            if (($cData['zone'] ?? null) === $preferredZone) {
-                $targetContainerIds[] = $cId;
-            }
-        }
+        $targetZone = $preferredZone;
+        foreach ($allContainerDimensions as $cId => $cData) { if (($cData['zone'] ?? null) === $targetZone) { $targetContainerIds[] = $cId; $foundInZone = true; } }
     }
 
-    if (empty($targetContainerIds)) {
-         $reason = $preferredZone ? "Preferred zone '$preferredZone' has no valid containers or preference invalid." : "No preferred container/zone specified for high-priority item.";
-         error_log("Rearrange for $itemIdToPlace: FAILED - $reason");
-        return ['success' => false, 'reason' => $reason, 'moves' => [], 'finalPlacement' => null, 'newState' => $currentPlacementState, 'nextStep' => $stepCounter];
-    }
-     error_log("Rearrange for $itemIdToPlace: Targeting containers: " . implode(', ', $targetContainerIds));
+    if (empty($targetContainerIds)) { /* ... handle no target ... */ return ['success' => false, 'reason' => 'No valid target for rearrangement', 'moves' => [], 'finalPlacement' => null, 'newState' => $currentPlacementState, 'nextStep' => $stepCounter]; }
+     error_log("Rearrange for $itemIdToPlace: Final target containers: " . implode(', ', $targetContainerIds));
 
-    // 2. Iterate through TARGET containers, trying to find/make space
     foreach ($targetContainerIds as $targetContainerId) {
-        error_log("Rearrange for $itemIdToPlace: Assessing target container $targetContainerId");
+        error_log("Rearrange for $itemIdToPlace: Assessing target $targetContainerId");
+        if (!isset($allContainerDimensions[$targetContainerId])) continue;
         $targetContainerDims = $allContainerDimensions[$targetContainerId];
-        $itemsInTargetContainerOriginal = $tempPlacementState[$targetContainerId] ?? []; // State before moves for *this container*
+        $itemsInTargetContainerOriginal = $tempPlacementState[$targetContainerId] ?? [];
 
-        // 3. Find the *ideal* spot in this target container (using findSpaceForItem on empty)
-        $potentialIdealPlacement = findSpaceForItem(
-            $itemIdToPlace, $itemDimensionsApi, $itemPriority,
-            $targetContainerId, $targetContainerDims, [] // Check against EMPTY
-        );
-
-        if ($potentialIdealPlacement === null) {
-            error_log("Rearrange for $itemIdToPlace: Item doesn't fit geometrically in target container $targetContainerId. Skipping.");
-            continue;
-        }
+        $potentialIdealPlacement = findSpaceForItem($itemIdToPlace, $itemDimensionsApi, $itemPriority, $targetContainerId, $targetContainerDims, []);
+        if ($potentialIdealPlacement === null) { error_log("Rearrange [$itemIdToPlace]: Doesn't fit in $targetContainerId."); continue; }
         $idealCoords = ['x' => $potentialIdealPlacement['foundX'], 'y' => $potentialIdealPlacement['foundY'], 'z' => $potentialIdealPlacement['foundZ'], 'w' => $potentialIdealPlacement['placedW'], 'd' => $potentialIdealPlacement['placedD'], 'h' => $potentialIdealPlacement['placedH']];
-         error_log("Rearrange for $itemIdToPlace: Ideal spot in $targetContainerId identified: (Y=$idealCoords[y], Z=$idealCoords[z], X=$idealCoords[x])");
+        error_log("Rearrange [$itemIdToPlace]: Ideal in $targetContainerId: (Y={$idealCoords['y']}, Z={$idealCoords['z']}, X={$idealCoords['x']})");
 
-        // 4. Identify Blockers: Which LOW_PRIORITY items overlap this ideal spot?
-        $blockersToMove = []; // Array of ['id', 'index', 'data', 'originalDims']
-        $foundHighPriorityBlocker = false;
+        $blockersToMove = []; $foundNonMovableBlocker = false;
         foreach ($itemsInTargetContainerOriginal as $index => $existingItem) {
             if (boxesOverlap($idealCoords, $existingItem)) {
                 $blockerId = $existingItem['id'];
-                if (!isset($itemsMasterList[$blockerId])) {
-                     error_log("Rearrange for $itemIdToPlace: CRITICAL - Missing master data for potential blocker $blockerId. Aborting for this container.");
-                     $foundHighPriorityBlocker = true; break; // Treat as high priority if data missing
-                }
+                if (!isset($itemsMasterList[$blockerId])) { $foundNonMovableBlocker = true; error_log("Rearrange [$itemIdToPlace]: Blocker $blockerId MISSING MASTER DATA"); break; }
                 $blockerPriority = $itemsMasterList[$blockerId]['priority'] ?? 999;
                 $blockerOriginalDimensions = $itemsMasterList[$blockerId]['dimensions_api'] ?? null;
+                if (!$blockerOriginalDimensions || ($blockerOriginalDimensions['width'] ?? 0) <= 0) { $foundNonMovableBlocker = true; error_log("Rearrange [$itemIdToPlace]: Blocker $blockerId MISSING DIMS"); break; }
 
-                if (!$blockerOriginalDimensions || ($blockerOriginalDimensions['width'] ?? 0) <=0) { // More robust check
-                    error_log("Rearrange for $itemIdToPlace: CRITICAL - Missing/Invalid original dimensions for potential blocker $blockerId. Aborting for this container.");
-                    $foundHighPriorityBlocker = true; break; // Treat as high priority
-                }
-
-                if ($blockerPriority <= LOW_PRIORITY_THRESHOLD) {
-                    error_log("Rearrange for $itemIdToPlace: Found LOW priority blocker $blockerId (Prio: $blockerPriority) at index $index in $targetContainerId.");
+                if ($blockerPriority < $itemPriority) {
+                    error_log("Rearrange [$itemIdToPlace]: Found blocker $blockerId (Prio: $blockerPriority) < item prio ($itemPriority). Can move.");
                     $blockersToMove[] = ['id' => $blockerId, 'index' => $index, 'data' => $existingItem, 'originalDims' => $blockerOriginalDimensions];
                 } else {
-                     error_log("Rearrange for $itemIdToPlace: Found HIGH priority blocker $blockerId (Prio: $blockerPriority >= " . LOW_PRIORITY_THRESHOLD . "). Cannot move it. Aborting for this container ($targetContainerId).");
-                    $foundHighPriorityBlocker = true;
-                    break; // Stop checking blockers for this container
+                     error_log("Rearrange [$itemIdToPlace]: Found blocker $blockerId (Prio: $blockerPriority) >= item prio ($itemPriority). CANNOT move.");
+                    $foundNonMovableBlocker = true; break;
                 }
             }
         }
+        if ($foundNonMovableBlocker) { error_log("Rearrange [$itemIdToPlace]: Aborting $targetContainerId due to non-movable blocker."); continue; }
 
-        if ($foundHighPriorityBlocker) {
-            $blockersToMove = []; // Clear any identified low-prio blockers
-             error_log("Rearrange for $itemIdToPlace: Aborting attempt for container $targetContainerId due to non-movable blocker.");
-            continue; // Try next target container
-        }
-
-        // 5. Attempt to Relocate Blockers (if any)
-        $allBlockersRelocatedSuccessfully = true;
-        $currentMovesForThisAttempt = []; // Track moves specific to this target container attempt
-        $tempStateForThisAttempt = $tempPlacementState; // State evolves as we plan moves
+        $allBlockersRelocatedSuccessfully = true; $currentMovesForThisAttempt = [];
+        $tempStateForThisAttempt = $tempPlacementState; // Re-copy state for this attempt
 
         if (!empty($blockersToMove)) {
-            error_log("Rearrange for $itemIdToPlace: Attempting to relocate " . count($blockersToMove) . " blockers in $targetContainerId.");
-            // Sort blockers? Maybe by volume (smaller first) or Y coord (front first)? Simple order for now.
+            error_log("Rearrange [$itemIdToPlace]: Relocating " . count($blockersToMove) . " blockers in $targetContainerId.");
             foreach ($blockersToMove as $blockerInfo) {
-                $blockerId = $blockerInfo['id'];
-                $blockerData = $blockerInfo['data']; // Current position/dims
-                $blockerOriginalDimensions = $blockerInfo['originalDims'];
-
-                error_log("Rearrange for $itemIdToPlace: Finding relocation spot for blocker $blockerId...");
-
-                // *** Call relocation function using the *evolving* temporary state ***
-                $relocationSpot = findBestRelocationSpot(
-                    $blockerId,
-                    $blockerOriginalDimensions,
-                    $targetContainerId,     // Current container of blocker
-                    $blockerData,           // Original position to avoid
-                    $allContainerDimensions,
-                    $itemsMasterList,
-                    $tempStateForThisAttempt, // Use the state reflecting previous moves in *this attempt*
-                    $itemIdToPlace,         // Item we are making space for
-                    $idealCoords            // The ideal spot we are trying to clear
-                );
+                $blockerId = $blockerInfo['id']; $blockerData = $blockerInfo['data']; $blockerOriginalDimensions = $blockerInfo['originalDims'];
+                error_log("Rearrange [$itemIdToPlace]: Finding spot for blocker $blockerId...");
+                $relocationSpot = findBestRelocationSpot($blockerId, $blockerOriginalDimensions, $targetContainerId, $blockerData, $allContainerDimensions, $itemsMasterList, $tempStateForThisAttempt, $itemIdToPlace, $idealCoords);
 
                 if ($relocationSpot) {
-                    $newContId = $relocationSpot['containerId'];
-                    $newX = $relocationSpot['foundX']; $newY = $relocationSpot['foundY']; $newZ = $relocationSpot['foundZ'];
-                    $newW = $relocationSpot['placedW']; $newD = $relocationSpot['placedD']; $newH = $relocationSpot['placedH'];
-                    error_log("Rearrange for $itemIdToPlace: Found relocation spot for blocker $blockerId in $newContId at (Y=$newY, Z=$newZ, X=$newX). Recording move.");
-
-                    // Record the move details
-                    $moveData = [
-                        'step' => $stepCounter + count($currentMovesForThisAttempt), // Provisional step number
-                        'action' => 'move',
-                        'itemId' => $blockerId,
-                        'fromContainer' => $targetContainerId,
-                        'fromPosition' => formatApiPosition($blockerData['x'], $blockerData['y'], $blockerData['z'], $blockerData['w'], $blockerData['d'], $blockerData['h']),
-                        'toContainer' => $newContId,
-                        'toPosition' => formatApiPosition($newX, $newY, $newZ, $newW, $newD, $newH)
-                    ];
-                    $currentMovesForThisAttempt[] = [
-                         'apiResponse' => $moveData,
-                         'itemId' => $blockerId,
-                         'dbUpdate' => ['action' => 'move', 'itemId' => $blockerId, 'containerId' => $newContId, 'positionX' => $newX, 'positionY' => $newY, 'positionZ' => $newZ, 'placedDimensionW' => $newW, 'placedDimensionD' => $newD, 'placedDimensionH' => $newH ]
-                    ];
-
-                    // *** Update the temporary state for the *next* blocker's relocation check ***
-                     // Remove from old container state in the temporary copy
-                     $found = false;
-                     if (isset($tempStateForThisAttempt[$targetContainerId])) {
-                         foreach ($tempStateForThisAttempt[$targetContainerId] as $idx => $item) {
-                             if ($item['id'] === $blockerId) {
-                                 unset($tempStateForThisAttempt[$targetContainerId][$idx]);
-                                 $tempStateForThisAttempt[$targetContainerId] = array_values($tempStateForThisAttempt[$targetContainerId]);
-                                 $found = true; break;
-                             }
-                         }
-                     }
-                     if (!$found) error_log("Rearrange for $itemIdToPlace: WARN - Blocker $blockerId not found in old container $targetContainerId during temp state update.");
-
-                     // Add to new container state in the temporary copy
+                    $newContId = $relocationSpot['containerId']; $newX = $relocationSpot['foundX']; $newY = $relocationSpot['foundY']; $newZ = $relocationSpot['foundZ']; $newW = $relocationSpot['placedW']; $newD = $relocationSpot['placedD']; $newH = $relocationSpot['placedH'];
+                    error_log("Rearrange [$itemIdToPlace]: Relocated blocker $blockerId to $newContId (Y=$newY, Z=$newZ, X=$newX).");
+                    $moveData = [ 'step' => $stepCounter + count($currentMovesForThisAttempt), 'action' => 'move','itemId' => $blockerId, 'fromContainer' => $targetContainerId,'fromPosition' => formatApiPosition($blockerData['x'], $blockerData['y'], $blockerData['z'], $blockerData['w'], $blockerData['d'], $blockerData['h']), 'toContainer' => $newContId,'toPosition' => formatApiPosition($newX, $newY, $newZ, $newW, $newD, $newH) ];
+                    $dbUpdateData = ['action' => 'move', 'itemId' => $blockerId, 'containerId' => $newContId, 'positionX' => $newX, 'positionY' => $newY, 'positionZ' => $newZ, 'placedDimensionW' => $newW, 'placedDimensionD' => $newD, 'placedDimensionH' => $newH ];
+                    $currentMovesForThisAttempt[] = ['apiResponse' => $moveData, 'itemId' => $blockerId, 'dbUpdate' => $dbUpdateData];
+                    // Update temp state
+                     $found = false; if (isset($tempStateForThisAttempt[$targetContainerId])) { foreach ($tempStateForThisAttempt[$targetContainerId] as $idx => $item) { if ($item['id'] === $blockerId) { unset($tempStateForThisAttempt[$targetContainerId][$idx]); $tempStateForThisAttempt[$targetContainerId] = array_values($tempStateForThisAttempt[$targetContainerId]); $found = true; break; } } }
+                     if (!$found) error_log("Rearrange WARN [$itemIdToPlace]: Blocker $blockerId not found in old container $targetContainerId state.");
                      if (!isset($tempStateForThisAttempt[$newContId])) $tempStateForThisAttempt[$newContId] = [];
                      $tempStateForThisAttempt[$newContId][] = ['id' => $blockerId, 'x' => $newX, 'y' => $newY, 'z' => $newZ, 'w' => $newW, 'd' => $newD, 'h' => $newH];
-                     // No need to re-index target container here, done after loop if successful
-
                 } else {
-                    error_log("Rearrange for $itemIdToPlace: FAILED to find relocation spot for blocker $blockerId. Aborting rearrangement for $targetContainerId.");
-                    $allBlockersRelocatedSuccessfully = false;
-                    // IMPORTANT: If one blocker fails, the entire attempt for this container fails.
-                    // No need to revert state as $tempStateForThisAttempt is local to this loop iteration.
-                    $currentMovesForThisAttempt = []; // Discard moves planned for this container
-                    break; // Stop trying to move blockers for this container
+                    error_log("Rearrange FAIL [$itemIdToPlace]: Could not relocate blocker $blockerId. Aborting $targetContainerId.");
+                    $allBlockersRelocatedSuccessfully = false; $currentMovesForThisAttempt = []; break;
                 }
-            } // End loop through blockers for this container
-        } // End if blockers needed moving
-
-        if (!$allBlockersRelocatedSuccessfully) {
-            error_log("Rearrange for $itemIdToPlace: Skipping $targetContainerId due to blocker relocation failure.");
-            continue; // Try the next target container
+            }
         }
+        if (!$allBlockersRelocatedSuccessfully) { error_log("Rearrange [$itemIdToPlace]: Skipping $targetContainerId due to blocker move failure."); continue; }
 
-        // 6. Verify Final Placement: Can the high-priority item *now* fit in the ideal spot
-        //    using the state reflecting the successful moves?
-        $finalPlacementCheck = findSpaceForItem(
-            $itemIdToPlace, $itemDimensionsApi, $itemPriority,
-            $targetContainerId, $targetContainerDims,
-            $tempStateForThisAttempt[$targetContainerId] ?? [] // Use the state after hypothetical moves
-        );
-
-        // Check if the found spot is the ideal spot (or very close to it)
+        $finalPlacementCheck = findSpaceForItem($itemIdToPlace, $itemDimensionsApi, $itemPriority, $targetContainerId, $targetContainerDims, $tempStateForThisAttempt[$targetContainerId] ?? []);
         $isIdealSpotFound = false;
-        if ($finalPlacementCheck !== null &&
-            abs($finalPlacementCheck['foundX'] - $idealCoords['x']) < POSITION_EPSILON &&
-            abs($finalPlacementCheck['foundY'] - $idealCoords['y']) < POSITION_EPSILON &&
-            abs($finalPlacementCheck['foundZ'] - $idealCoords['z']) < POSITION_EPSILON)
-        {
-             $isIdealSpotFound = true;
-        }
+        if ($finalPlacementCheck !== null && abs($finalPlacementCheck['foundX'] - $idealCoords['x']) < POSITION_EPSILON && abs($finalPlacementCheck['foundY'] - $idealCoords['y']) < POSITION_EPSILON && abs($finalPlacementCheck['foundZ'] - $idealCoords['z']) < POSITION_EPSILON) { $isIdealSpotFound = true; }
 
         if ($isIdealSpotFound) {
-            error_log("Rearrange for $itemIdToPlace: SUCCESS! Final placement verified in $targetContainerId after moving blockers.");
-            $finalX = $finalPlacementCheck['foundX']; $finalY = $finalPlacementCheck['foundY']; $finalZ = $finalPlacementCheck['foundZ'];
-            $finalW = $finalPlacementCheck['placedW']; $finalD = $finalPlacementCheck['placedD']; $finalH = $finalPlacementCheck['placedH'];
-
-            // Finalize step numbers for the committed moves
-            $committedMoves = [];
-            foreach ($currentMovesForThisAttempt as $move) {
-                 $move['apiResponse']['step'] = $stepCounter++; // Assign final step number
-                 $committedMoves[] = $move;
-            }
-
-
-            // Prepare final placement data
+             error_log("Rearrange SUCCESS [$itemIdToPlace]: Final placement verified in ideal spot in $targetContainerId.");
+            $finalX = $finalPlacementCheck['foundX']; $finalY = $finalPlacementCheck['foundY']; $finalZ = $finalPlacementCheck['foundZ']; $finalW = $finalPlacementCheck['placedW']; $finalD = $finalPlacementCheck['placedD']; $finalH = $finalPlacementCheck['placedH'];
+            $committedMoves = []; $currentStep = $stepCounter;
+            foreach ($currentMovesForThisAttempt as $move) { $move['apiResponse']['step'] = $currentStep++; $committedMoves[] = $move; }
             $finalPlacementData = [
-                'apiResponse' => [ // For the rearrangement steps array
-                    'step' => $stepCounter++,
-                    'action' => 'place',
-                    'itemId' => $itemIdToPlace,
-                    'fromContainer' => null, 'fromPosition' => null,
-                    'toContainer' => $targetContainerId,
-                    'toPosition' => formatApiPosition($finalX, $finalY, $finalZ, $finalW, $finalD, $finalH)
-                ],
-                'placementResponse' => [ // For the main 'placements' array
-                    'itemId' => $itemIdToPlace,
-                    'containerId' => $targetContainerId,
-                    'position' => formatApiPosition($finalX, $finalY, $finalZ, $finalW, $finalD, $finalH)
-                ],
-                'dbUpdate' => ['action' => 'place', 'itemId' => $itemIdToPlace, 'containerId' => $targetContainerId, 'positionX' => $finalX, 'positionY' => $finalY, 'positionZ' => $finalZ, 'placedDimensionW' => $finalW, 'placedDimensionD' => $finalD, 'placedDimensionH' => $finalH ]
-            ];
-
-            // Add the final placement to the temporary state as well before returning it
+                 'apiResponse' => ['step' => $currentStep++, 'action' => 'place', 'itemId' => $itemIdToPlace, 'fromContainer' => null, 'fromPosition' => null, 'toContainer' => $targetContainerId, 'toPosition' => formatApiPosition($finalX, $finalY, $finalZ, $finalW, $finalD, $finalH)],
+                 'placementResponse' => ['itemId' => $itemIdToPlace, 'containerId' => $targetContainerId, 'position' => formatApiPosition($finalX, $finalY, $finalZ, $finalW, $finalD, $finalH)],
+                 'dbUpdate' => ['action' => 'place', 'itemId' => $itemIdToPlace, 'containerId' => $targetContainerId, 'positionX' => $finalX, 'positionY' => $finalY, 'positionZ' => $finalZ, 'placedDimensionW' => $finalW, 'placedDimensionD' => $finalD, 'placedDimensionH' => $finalH ]
+             ];
              if (!isset($tempStateForThisAttempt[$targetContainerId])) $tempStateForThisAttempt[$targetContainerId] = [];
              $tempStateForThisAttempt[$targetContainerId][] = ['id' => $itemIdToPlace, 'x' => $finalX, 'y' => $finalY, 'z' => $finalZ, 'w' => $finalW, 'd' => $finalD, 'h' => $finalH];
-             $tempStateForThisAttempt[$targetContainerId] = array_values($tempStateForThisAttempt[$targetContainerId]); // Re-index after adding
-
-
-            // Return success with the committed moves and the final state
-            return [
-                'success' => true,
-                'reason' => 'Rearrangement successful in container ' . $targetContainerId,
-                'moves' => $committedMoves, // Moves that were successfully planned and executed
-                'finalPlacement' => $finalPlacementData,
-                'newState' => $tempStateForThisAttempt, // Return the fully updated state reflecting moves and final placement
-                'nextStep' => $stepCounter // Return the updated step counter
-            ];
-
+             $tempStateForThisAttempt[$targetContainerId] = array_values($tempStateForThisAttempt[$targetContainerId]);
+             return ['success' => true,'reason' => 'Rearrangement successful in container ' . $targetContainerId,'moves' => $committedMoves,'finalPlacement' => $finalPlacementData,'newState' => $tempStateForThisAttempt,'nextStep' => $currentStep ];
         } else {
-            error_log("Rearrange for $itemIdToPlace: FAILED FINAL CHECK in $targetContainerId. Item couldn't be placed in ideal spot even after alleged blocker moves. Check results: " . json_encode($finalPlacementCheck));
-            // Discard moves ($currentMovesForThisAttempt is not used) and try the next target container.
+            error_log("Rearrange FAIL [$itemIdToPlace]: FINAL CHECK FAILED in $targetContainerId. Spot found: " . json_encode($finalPlacementCheck));
             continue;
         }
-
     } // End loop through target containers
 
-    // If loop finishes without success in any target container
-    error_log("Rearrange for $itemIdToPlace: Exhausted all target containers. Rearrangement failed.");
-    return ['success' => false, 'reason' => 'Could not find suitable rearrangement solution in any target container.', 'moves' => [], 'finalPlacement' => null, 'newState' => $currentPlacementState, 'nextStep' => $stepCounter]; // Return original state
+    error_log("Rearrange FAIL [$itemIdToPlace]: Exhausted all target containers.");
+    return ['success' => false, 'reason' => 'Could not find suitable rearrangement solution in any target container.', 'moves' => [], 'finalPlacement' => null, 'newState' => $currentPlacementState, 'nextStep' => $stepCounter];
 }
 
-
-/**
- * Helper to format position array for API response.
- */
+// --- formatApiPosition(...) - Unchanged ---
 function formatApiPosition(float $x, float $y, float $z, float $w, float $d, float $h): array {
-    return [
+    // ... (same as V9) ...
+     return [
         'startCoordinates' => ['width' => round($x, 3), 'depth' => round($y, 3), 'height' => round($z, 3)],
         'endCoordinates' => ['width' => round($x + $w, 3), 'depth' => round($y + $d, 3), 'height' => round($z + $h, 3)]
     ];
 }
 
+// --- placeSingleItem(...) - Unchanged ---
+function placeSingleItem(
+    array $itemToPlaceData,
+    array $itemsMasterList,
+    array $containerDimensionsMap,
+    array &$currentPlacementState, // Pass by reference
+    int &$stepCounter,             // Pass by reference
+    bool $enableRearrangement
+): array {
+    // ... (same V9 implementation with fallback logic) ...
+    $currentItemId = $itemToPlaceData['itemId'] ?? null;
+    if ($currentItemId === null || !isset($itemsMasterList[$currentItemId])) { /* ... handle error ... */ return ['success' => false, 'reason' => 'Invalid item data.', /* ... */]; }
+    $itemMasterData = $itemsMasterList[$currentItemId];
+    $itemDimensionsApi = $itemMasterData['dimensions_api'] ?? null;
+    $currentItemPriority = $itemMasterData['priority'];
+    $preferredContainerIdSpecific = $itemMasterData['preferredContainerId']; $preferredZone = $itemMasterData['preferredZone'];
+    if ($preferredContainerIdSpecific === '') $preferredContainerIdSpecific = null; if ($preferredZone === '') $preferredZone = null;
+    if (!$itemDimensionsApi || ($itemDimensionsApi['width'] ?? 0) <= 0) { /* ... handle error ... */ return ['success' => false, 'reason' => "Invalid dimensions for $currentItemId.", /* ... */]; }
+    $tier = ($currentItemPriority >= HIGH_PRIORITY_THRESHOLD) ? 'High' : (($currentItemPriority <= LOW_PRIORITY_THRESHOLD) ? 'Low' : 'Medium');
+    error_log("placeSingleItem Processing Item $currentItemId (Priority: $currentItemPriority, Tier: $tier, PrefZone: " . ($preferredZone ?? 'None') . ", PrefCont: " . ($preferredContainerIdSpecific ?? 'None') . ", RearrEnabled: ".($enableRearrangement?'Yes':'No').")");
+
+    // --- Determine Container Search Order ---
+    $containersToTryIds = []; $processedIds = [];
+    if ($preferredContainerIdSpecific !== null && isset($containerDimensionsMap[$preferredContainerIdSpecific])) { $containersToTryIds[] = $preferredContainerIdSpecific; $processedIds[$preferredContainerIdSpecific] = true; }
+    if ($preferredZone !== null) { foreach ($containerDimensionsMap as $cId => $cData) { if (!isset($processedIds[$cId]) && ($cData['zone'] ?? null) === $preferredZone) { $containersToTryIds[] = $cId; $processedIds[$cId] = true; } } }
+    elseif ($preferredContainerIdSpecific !== null && isset($containerDimensionsMap[$preferredContainerIdSpecific]['zone'])) { $specificContainerZone = $containerDimensionsMap[$preferredContainerIdSpecific]['zone']; if ($specificContainerZone !== null) { foreach ($containerDimensionsMap as $cId => $cData) { if (!isset($processedIds[$cId]) && ($cData['zone'] ?? null) === $specificContainerZone) { $containersToTryIds[] = $cId; $processedIds[$cId] = true; } } } }
+    foreach ($containerDimensionsMap as $cId => $cData) { if (!isset($processedIds[$cId])) { $containersToTryIds[] = $cId; } }
+
+    // --- Attempt Direct Placement - Find BEST *OVERALL* spot ---
+    $bestOverallPlacementData = null; $bestOverallAdjustedScore = null; $bestOverallContainerId = null; $idealSpotBlockedInPreferred = false;
+    foreach ($containersToTryIds as $containerId) {
+        if (!isset($containerDimensionsMap[$containerId])) continue;
+        $containerDimensionsApi = $containerDimensionsMap[$containerId];
+        $itemsCurrentlyInContainer = $currentPlacementState[$containerId] ?? [];
+        $containerZone = $containerDimensionsMap[$containerId]['zone'] ?? null;
+        $placementInThisContainer = findSpaceForItem( $currentItemId, $itemDimensionsApi, $currentItemPriority, $containerId, $containerDimensionsApi, $itemsCurrentlyInContainer );
+        if ($placementInThisContainer !== null) {
+             $geometricScore = $placementInThisContainer['score']; $adjustedScore = $geometricScore;
+             $isCurrentContainerPreferred = false;
+             if ($preferredContainerIdSpecific !== null) { if ($preferredContainerIdSpecific === $containerId) $isCurrentContainerPreferred = true; }
+             elseif ($preferredZone !== null) { if ($containerZone === $preferredZone) $isCurrentContainerPreferred = true; }
+             else { $isCurrentContainerPreferred = true; }
+             if (!$isCurrentContainerPreferred) { $adjustedScore += PREFERRED_ZONE_SCORE_PENALTY; }
+             else { if ($geometricScore > FLOAT_EPSILON) $idealSpotBlockedInPreferred = true; }
+             if ($bestOverallAdjustedScore === null || $adjustedScore < $bestOverallAdjustedScore) { $bestOverallAdjustedScore = $adjustedScore; $bestOverallPlacementData = $placementInThisContainer; $bestOverallContainerId = $containerId; }
+        }
+    }
+
+    // --- Process Best Found Spot (Decision Logic) ---
+    $triggerRearrangement = false; $placeDirectly = false; $rearrangementResult = null;
+    if ($bestOverallPlacementData !== null) {
+        $chosenContainerId = $bestOverallContainerId; $chosenContainerZone = $containerDimensionsMap[$chosenContainerId]['zone'] ?? null;
+        $isChosenSpotPreferred = false;
+        if ($preferredContainerIdSpecific !== null) { if ($preferredContainerIdSpecific === $chosenContainerId) $isChosenSpotPreferred = true; }
+        elseif ($preferredZone !== null) { if ($chosenContainerZone === $preferredZone) $isChosenSpotPreferred = true; }
+        else { $isChosenSpotPreferred = true; }
+
+        if ($tier === 'High' && $enableRearrangement) {
+            if (!$isChosenSpotPreferred || $idealSpotBlockedInPreferred) { $triggerRearrangement = true; error_log("Item $currentItemId (High Prio): Rearrangement Triggered (SpotPref:".($isChosenSpotPreferred?'Y':'N').",IdealBlocked:".($idealSpotBlockedInPreferred?'Y':'N').")"); }
+            else { $placeDirectly = true; error_log("Item $currentItemId (High Prio): Best spot preferred/ideal. Place directly."); }
+        } else { $placeDirectly = true; error_log("Item $currentItemId ($tier Prio): Place directly."); }
+    } else {
+        error_log("Item $currentItemId: No direct spot found.");
+        if ($tier === 'High' && $enableRearrangement && ($preferredContainerIdSpecific !== null || $preferredZone !== null)) { $triggerRearrangement = true; error_log("Item $currentItemId (High Prio): Triggering rearrange (no spot found)."); }
+    }
+
+    // --- Perform Action ---
+    if ($placeDirectly) {
+        $foundX = (float)$bestOverallPlacementData['foundX']; $foundY = (float)$bestOverallPlacementData['foundY']; $foundZ = (float)$bestOverallPlacementData['foundZ'];
+        $placedW = (float)$bestOverallPlacementData['placedW']; $placedD = (float)$bestOverallPlacementData['placedD']; $placedH = (float)$bestOverallPlacementData['placedH'];
+        $chosenContainerId = $bestOverallContainerId;
+        error_log("Item $currentItemId: Placing directly in $chosenContainerId at (Y=$foundY, Z=$foundZ, X=$foundX).");
+        if (!isset($currentPlacementState[$chosenContainerId])) { $currentPlacementState[$chosenContainerId] = []; }
+        $currentPlacementState[$chosenContainerId][] = [ 'id' => $currentItemId, 'x' => $foundX, 'y' => $foundY, 'z' => $foundZ, 'w' => $placedW, 'd' => $placedD, 'h' => $placedH ];
+        $currentPlacementState[$chosenContainerId] = array_values($currentPlacementState[$chosenContainerId]);
+        return [ 'success' => true, 'reason' => 'Placed directly.', 'placement' => ['itemId' => $currentItemId, 'containerId' => $chosenContainerId, 'position' => formatApiPosition($foundX, $foundY, $foundZ, $placedW, $placedD, $placedH)], 'rearrangementResult' => null, 'dbUpdate' => ['action' => 'place', 'itemId' => $currentItemId, 'containerId' => $chosenContainerId, 'positionX' => $foundX, 'positionY' => $foundY, 'positionZ' => $foundZ, 'placedDimensionW' => $placedW, 'placedDimensionD' => $placedD, 'placedDimensionH' => $placedH ] ];
+    } elseif ($triggerRearrangement) {
+        error_log("Item $currentItemId (High Prio): Calling attemptRearrangement...");
+        $rearrangementResult = attemptRearrangementForHighPriorityItem( $currentItemId, $itemDimensionsApi, $currentItemPriority, $preferredContainerIdSpecific, $preferredZone, $containerDimensionsMap, $currentPlacementState, $itemsMasterList, $stepCounter );
+        if ($rearrangementResult['success']) {
+            error_log("Item $currentItemId: Rearrangement successful.");
+            $currentPlacementState = $rearrangementResult['newState']; $stepCounter = $rearrangementResult['nextStep'];
+            return [ 'success' => true, 'reason' => 'Placed via rearrangement.', 'placement' => $rearrangementResult['finalPlacement']['placementResponse'], 'rearrangementResult' => $rearrangementResult, 'dbUpdate' => null ];
+        } else {
+            error_log("Item $currentItemId: Rearrangement FAILED. Reason: " . ($rearrangementResult['reason'] ?? 'Unknown'));
+            // --- START: FALLBACK LOGIC ---
+            $fallbackPossible = false; $fallbackReason = "";
+            if ($bestOverallPlacementData !== null) {
+                $fallbackContainerId = $bestOverallContainerId; $fallbackContainerZone = $containerDimensionsMap[$fallbackContainerId]['zone'] ?? null;
+                $isFallbackSpotPreferred = false;
+                if ($preferredContainerIdSpecific !== null) { if ($preferredContainerIdSpecific === $fallbackContainerId) $isFallbackSpotPreferred = true; }
+                elseif ($preferredZone !== null) { if ($fallbackContainerZone === $preferredZone) $isFallbackSpotPreferred = true; }
+                else { $isFallbackSpotPreferred = true; }
+                if ($isFallbackSpotPreferred) { error_log("Item $currentItemId: Attempting fallback in $fallbackContainerId"); $fallbackPossible = true; }
+                else { $fallbackReason = "Original best spot ($fallbackContainerId) not preferred."; error_log("Item $currentItemId: Not falling back: $fallbackReason"); }
+            } else { $fallbackReason = "No initial spot found."; error_log("Item $currentItemId: Cannot fallback: $fallbackReason"); }
+            if ($fallbackPossible) {
+                $foundX = (float)$bestOverallPlacementData['foundX']; $foundY = (float)$bestOverallPlacementData['foundY']; $foundZ = (float)$bestOverallPlacementData['foundZ']; $placedW = (float)$bestOverallPlacementData['placedW']; $placedD = (float)$bestOverallPlacementData['placedD']; $placedH = (float)$bestOverallPlacementData['placedH'];
+                error_log("Item $currentItemId: Placing via fallback in $fallbackContainerId at (Y=$foundY, Z=$foundZ, X=$foundX).");
+                if (!isset($currentPlacementState[$fallbackContainerId])) { $currentPlacementState[$fallbackContainerId] = []; }
+                $currentPlacementState[$fallbackContainerId][] = [ 'id' => $currentItemId, 'x' => $foundX, 'y' => $foundY, 'z' => $foundZ, 'w' => $placedW, 'd' => $placedD, 'h' => $placedH ];
+                $currentPlacementState[$fallbackContainerId] = array_values($currentPlacementState[$fallbackContainerId]);
+                return [ 'success' => true, 'reason' => 'Placed via fallback after failed rearrangement.', 'placement' => ['itemId' => $currentItemId, 'containerId' => $fallbackContainerId, 'position' => formatApiPosition($foundX, $foundY, $foundZ, $placedW, $placedD, $placedH)], 'rearrangementResult' => $rearrangementResult, 'dbUpdate' => ['action' => 'place', 'itemId' => $currentItemId, 'containerId' => $fallbackContainerId, 'positionX' => $foundX, 'positionY' => $foundY, 'positionZ' => $foundZ, 'placedDimensionW' => $placedW, 'placedDimensionD' => $placedD, 'placedDimensionH' => $placedH ] ];
+            } else {
+                 return ['success' => false, 'reason' => ($rearrangementResult['reason'] ?? 'Rearrangement failed.') . ($fallbackReason ? " Fallback failed: $fallbackReason" : ''), 'placement' => null, 'rearrangementResult' => $rearrangementResult, 'dbUpdate' => null];
+            }
+            // --- END: FALLBACK LOGIC ---
+        }
+    } else {
+        return ['success' => false, 'reason' => 'No placement space found and rearrangement/fallback not applicable.', 'placement' => null, 'rearrangementResult' => null, 'dbUpdate' => null];
+    }
+}
+
+
+// --- NEW HELPER FUNCTION for Refinement Pass ---
+/**
+ * Checks if an item (given its API dimensions) can fit exactly into a target box
+ * using one of its orientations.
+ *
+ * @param array $itemApiDims Dimensions ('width', 'depth', 'height') of the item.
+ * @param array $targetBox   Placement box details ('w', 'd', 'h') to fit into.
+ * @return ?array Returns the dimensions ['w', 'd', 'h'] of the fitting orientation, or null if none fit.
+ */
+function findFittingOrientation(array $itemApiDims, array $targetBox): ?array {
+    $targetW = (float)($targetBox['w'] ?? 0);
+    $targetD = (float)($targetBox['d'] ?? 0);
+    $targetH = (float)($targetBox['h'] ?? 0);
+
+    // Check if target dimensions are valid
+    if ($targetW <= FLOAT_EPSILON || $targetD <= FLOAT_EPSILON || $targetH <= FLOAT_EPSILON) {
+        return null; // Cannot fit into a zero-dimension box
+    }
+
+    $orientations = generateOrientations($itemApiDims);
+    if (empty($orientations)) return null; // Item itself has invalid dimensions
+
+    foreach ($orientations as $o) {
+        // Compare dimensions using epsilon for float safety
+        if (abs($o['width'] - $targetW) < FLOAT_EPSILON &&
+            abs($o['depth'] - $targetD) < FLOAT_EPSILON &&
+            abs($o['height'] - $targetH) < FLOAT_EPSILON) {
+            // Found an orientation that matches the target box dimensions
+            return ['w' => $o['width'], 'd' => $o['depth'], 'h' => $o['height']];
+        }
+    }
+
+    // No orientation fit exactly
+    return null;
+}
+
+
+// --- NEW Refinement Pass Function ---
+/**
+ * Post-processing pass to identify and perform direct swaps between
+ * higher-priority items placed behind lower-priority items.
+ *
+ * @param array &$placementState      Current placement state (passed by reference, will be modified).
+ * @param array $itemsMasterList      Master list with item details (priority, dimensions).
+ * @param int   &$stepCounter         Current step counter (passed by reference, will be incremented).
+ * @return array Structure containing:
+ *               'swapApiMoves' => array (API move instructions for swaps performed)
+ *               'swapDbUpdates' => array (DB update instructions for swapped items [itemId => dbUpdate])
+ */
+function refinePlacementsBySwapping(
+    array &$placementState, // Modifies state directly
+    array $itemsMasterList,
+    int &$stepCounter       // Modifies step counter
+): array {
+    error_log("--- Starting Refinement Swap Pass ---");
+    $swapApiMoves = [];
+    $swapDbUpdates = [];
+    $swappedItemIdsThisPass = []; // Prevent swapping same item back and forth within the pass
+
+    // Iterate through each container in the current placement state
+    foreach ($placementState as $containerId => $itemsInContainer) {
+        $itemCount = count($itemsInContainer);
+        if ($itemCount < 2) continue; // Need at least two items to swap
+
+        error_log("Refine Pass: Checking container $containerId with $itemCount items.");
+
+        // Use nested loops to compare all unique pairs (indices i, j where j > i)
+        for ($i = 0; $i < $itemCount; $i++) {
+            for ($j = $i + 1; $j < $itemCount; $j++) {
+                // Get current placement data directly from the (potentially modified) state
+                $itemA_pos = $placementState[$containerId][$i]; // Item at index i
+                $itemB_pos = $placementState[$containerId][$j]; // Item at index j
+                $itemA_id = $itemA_pos['id'];
+                $itemB_id = $itemB_pos['id'];
+
+                 // Skip if either item was already involved in a swap in this pass to avoid potential cycles/redundancy
+                 if (isset($swappedItemIdsThisPass[$itemA_id]) || isset($swappedItemIdsThisPass[$itemB_id])) {
+                    // error_log("Refine Pass: Skipping pair ($itemA_id, $itemB_id), one already swapped.");
+                    continue;
+                 }
+
+                // Get priorities and original dimensions from master list
+                $itemA_details = $itemsMasterList[$itemA_id] ?? null;
+                $itemB_details = $itemsMasterList[$itemB_id] ?? null;
+                if (!$itemA_details || !$itemB_details || !$itemA_details['dimensions_api'] || !$itemB_details['dimensions_api']) {
+                    error_log("Refine Pass WARN: Missing details or dimensions for pair ($itemA_id, $itemB_id). Skipping.");
+                    continue; // Skip if data is missing
+                }
+                $prioA = $itemA_details['priority'];
+                $prioB = $itemB_details['priority'];
+
+                // Determine High Priority (HP) and Low Priority (LP) item for this pair
+                $hpItem_id = null; $lpItem_id = null;
+                $hpItem_pos = null; $lpItem_pos = null;
+                $hpItem_details = null; $lpItem_details = null;
+
+                if ($prioA > $prioB) {
+                    $hpItem_id = $itemA_id; $lpItem_id = $itemB_id;
+                    $hpItem_pos = $itemA_pos; $lpItem_pos = $itemB_pos;
+                    $hpItem_details = $itemA_details; $lpItem_details = $itemB_details;
+                } elseif ($prioB > $prioA) {
+                    $hpItem_id = $itemB_id; $lpItem_id = $itemA_id;
+                    $hpItem_pos = $itemB_pos; $lpItem_pos = $itemA_pos;
+                    $hpItem_details = $itemB_details; $lpItem_details = $itemA_details;
+                } else {
+                    continue; // Skip items with same priority
+                }
+
+                // --- Check Trigger Condition: LP is in front of HP and potentially blocks ---
+                // 1. Is LP physically in front? (Lower Y coordinate)
+                if ($lpItem_pos['y'] >= $hpItem_pos['y'] - FLOAT_EPSILON) {
+                    continue; // LP is not in front of HP
+                }
+
+                // 2. Do their XZ projections overlap? (Check if LP is within HP's "retrieval shaft")
+                $xOverlap = ($lpItem_pos['x'] < $hpItem_pos['x'] + $hpItem_pos['w'] - FLOAT_EPSILON) &&
+                            ($lpItem_pos['x'] + $lpItem_pos['w'] > $hpItem_pos['x'] + FLOAT_EPSILON);
+                $zOverlap = ($lpItem_pos['z'] < $hpItem_pos['z'] + $hpItem_pos['h'] - FLOAT_EPSILON) &&
+                            ($lpItem_pos['z'] + $lpItem_pos['h'] > $hpItem_pos['z'] + FLOAT_EPSILON);
+
+                if (!$xOverlap || !$zOverlap) {
+                    // error_log("Refine Pass: Pair ($hpItem_id, $lpItem_id): LP in front but XZ projections do not overlap."); // Verbose
+                    continue; // LP is in front but not directly blocking the path based on XZ overlap
+                }
+
+                // --- Candidate Found: Check if direct swap is possible ---
+                error_log("Refine Pass: Candidate found in $containerId: HP=$hpItem_id (Y={$hpItem_pos['y']}) blocked by LP=$lpItem_id (Y={$lpItem_pos['y']}). Checking swap feasibility...");
+
+                // Can HP fit into LP's current box?
+                $fittingOrientationHP = findFittingOrientation($hpItem_details['dimensions_api'], $lpItem_pos);
+                // Can LP fit into HP's current box?
+                $fittingOrientationLP = findFittingOrientation($lpItem_details['dimensions_api'], $hpItem_pos);
+
+                if ($fittingOrientationHP !== null && $fittingOrientationLP !== null) {
+                    // --- Swap is Possible! ---
+                    error_log("Refine Pass: SWAP POSSIBLE between $hpItem_id and $lpItem_id in $containerId.");
+
+                    // 1. Generate API Move Instructions (BEFORE modifying state)
+                    $moveHP_api = [
+                        'step' => $stepCounter++,
+                        'action' => 'move', 'itemId' => $hpItem_id,
+                        'fromContainer' => $containerId, 'fromPosition' => formatApiPosition($hpItem_pos['x'], $hpItem_pos['y'], $hpItem_pos['z'], $hpItem_pos['w'], $hpItem_pos['d'], $hpItem_pos['h']),
+                        'toContainer' => $containerId, 'toPosition' => formatApiPosition($lpItem_pos['x'], $lpItem_pos['y'], $lpItem_pos['z'], $fittingOrientationHP['w'], $fittingOrientationHP['d'], $fittingOrientationHP['h']) // Use LP's coords, HP's fitting dims
+                    ];
+                    $moveLP_api = [
+                        'step' => $stepCounter++,
+                        'action' => 'move', 'itemId' => $lpItem_id,
+                        'fromContainer' => $containerId, 'fromPosition' => formatApiPosition($lpItem_pos['x'], $lpItem_pos['y'], $lpItem_pos['z'], $lpItem_pos['w'], $lpItem_pos['d'], $lpItem_pos['h']),
+                        'toContainer' => $containerId, 'toPosition' => formatApiPosition($hpItem_pos['x'], $hpItem_pos['y'], $hpItem_pos['z'], $fittingOrientationLP['w'], $fittingOrientationLP['d'], $fittingOrientationLP['h']) // Use HP's coords, LP's fitting dims
+                    ];
+                    $swapApiMoves[] = $moveHP_api;
+                    $swapApiMoves[] = $moveLP_api;
+
+                    // 2. Prepare DB Update Instructions
+                    $dbUpdateHP = [
+                        'action' => 'move', 'itemId' => $hpItem_id, 'containerId' => $containerId,
+                        'positionX' => $lpItem_pos['x'], 'positionY' => $lpItem_pos['y'], 'positionZ' => $lpItem_pos['z'],
+                        'placedDimensionW' => $fittingOrientationHP['w'], 'placedDimensionD' => $fittingOrientationHP['d'], 'placedDimensionH' => $fittingOrientationHP['h']
+                    ];
+                     $dbUpdateLP = [
+                        'action' => 'move', 'itemId' => $lpItem_id, 'containerId' => $containerId,
+                        'positionX' => $hpItem_pos['x'], 'positionY' => $hpItem_pos['y'], 'positionZ' => $hpItem_pos['z'],
+                        'placedDimensionW' => $fittingOrientationLP['w'], 'placedDimensionD' => $fittingOrientationLP['d'], 'placedDimensionH' => $fittingOrientationLP['h']
+                    ];
+                    $swapDbUpdates[$hpItem_id] = $dbUpdateHP; // Overwrite previous DB update if any
+                    $swapDbUpdates[$lpItem_id] = $dbUpdateLP; // Overwrite previous DB update if any
+
+                    // 3. Update the Placement State (critical: modify the array being iterated over)
+                    // Find original indices again just to be safe, though $i and $j should be correct
+                    $idx_hp = ($hpItem_id === $itemA_id) ? $i : $j;
+                    $idx_lp = ($lpItem_id === $itemA_id) ? $i : $j;
+
+                    // Update HP item's position in the state array
+                    $placementState[$containerId][$idx_hp]['x'] = $dbUpdateHP['positionX'];
+                    $placementState[$containerId][$idx_hp]['y'] = $dbUpdateHP['positionY'];
+                    $placementState[$containerId][$idx_hp]['z'] = $dbUpdateHP['positionZ'];
+                    $placementState[$containerId][$idx_hp]['w'] = $dbUpdateHP['placedDimensionW'];
+                    $placementState[$containerId][$idx_hp]['d'] = $dbUpdateHP['placedDimensionD'];
+                    $placementState[$containerId][$idx_hp]['h'] = $dbUpdateHP['placedDimensionH'];
+
+                     // Update LP item's position in the state array
+                    $placementState[$containerId][$idx_lp]['x'] = $dbUpdateLP['positionX'];
+                    $placementState[$containerId][$idx_lp]['y'] = $dbUpdateLP['positionY'];
+                    $placementState[$containerId][$idx_lp]['z'] = $dbUpdateLP['positionZ'];
+                    $placementState[$containerId][$idx_lp]['w'] = $dbUpdateLP['placedDimensionW'];
+                    $placementState[$containerId][$idx_lp]['d'] = $dbUpdateLP['placedDimensionD'];
+                    $placementState[$containerId][$idx_lp]['h'] = $dbUpdateLP['placedDimensionH'];
+
+                    // Mark these items as swapped in this pass
+                    $swappedItemIdsThisPass[$hpItem_id] = true;
+                    $swappedItemIdsThisPass[$lpItem_id] = true;
+
+                     // Since we modified the array, the indices $i and $j might now point to
+                     // different items if swaps occurred earlier in the inner loop.
+                     // To keep it simple for V1, we accept this limitation and continue.
+                     // A more robust solution might store swap pairs and apply them after iterating.
+                     error_log("Refine Pass: State updated for swap ($hpItem_id <-> $lpItem_id)");
+
+                } else {
+                     error_log("Refine Pass: Swap NOT possible between $hpItem_id and $lpItem_id (items do not fit in swapped locations). HP fits? ".($fittingOrientationHP?'Yes':'No').". LP fits? ".($fittingOrientationLP?'Yes':'No').".");
+                }
+            } // end inner loop j
+        } // end outer loop i
+    } // end container loop
+
+    error_log("--- Finished Refinement Swap Pass. Found " . count($swapApiMoves) / 2 . " potential swaps. ---");
+    return [
+        'swapApiMoves' => $swapApiMoves,
+        'swapDbUpdates' => $swapDbUpdates,
+        // placementState was modified by reference
+    ];
+}
+
+
 // #########################################################################
-// ## END: HELPER FUNCTIONS                                              ##
+// ## END: Core Helper Functions                                         ##
 // #########################################################################
 
 
 // --- Script Start ---
 $response = ['success' => false, 'placements' => [], 'rearrangements' => []];
-$internalErrors = [];
-$db = null;
-$itemsMasterList = []; // Store priority, original dimensions, preferences
+$internalErrors = []; $db = null; $itemsMasterList = [];
 
 // --- Database Connection ---
 try { $db = getDbConnection(); if ($db === null) throw new Exception("DB null"); }
@@ -567,466 +646,256 @@ catch (Exception $e) { http_response_code(503); error_log("FATAL: DB Connect Err
 
 // --- Input Processing ---
 $rawData = file_get_contents('php://input'); $requestData = json_decode($rawData, true);
-if ($requestData === null || !isset($requestData['items'], $requestData['containers']) || !is_array($requestData['items']) || !is_array($requestData['containers'])) {
-    http_response_code(400); error_log("Placement Error: Invalid JSON input: " . $rawData); echo json_encode(['success' => false, 'message' => 'Invalid input format.']); exit;
-}
+if ($requestData === null || !isset($requestData['items'], $requestData['containers']) || !is_array($requestData['items']) || !is_array($requestData['containers'])) { http_response_code(400); error_log("Placement Error: Invalid JSON input: " . $rawData); echo json_encode(['success' => false, 'message' => 'Invalid input format.']); exit; }
 $itemsToPlaceInput = $requestData['items']; $containersInput = $requestData['containers'];
 $containerDimensionsMap = []; foreach ($containersInput as $c) { if (isset($c['containerId'], $c['width'], $c['depth'], $c['height'])) { $containerDimensionsMap[$c['containerId']] = ['width' => (float)$c['width'], 'depth' => (float)$c['depth'], 'height' => (float)$c['height'], 'zone' => $c['zone'] ?? 'UnknownZone']; } else { error_log("Skipping invalid container data: ".json_encode($c)); } }
 error_log(PLACEMENT_ALGORITHM_NAME . " request: " . count($itemsToPlaceInput) . " items, " . count($containerDimensionsMap) . " valid containers.");
 
-
-// --- Load Existing Item State from DB (Crucial for rearrangements) ---
+// --- Load Existing Item State from DB ---
 $existingPlacedItemsByContainer = [];
-// $existingItemsMasterList will be populated below and merged with input item data
-try {
-    $sqlPlaced = "SELECT i.itemId, i.containerId, i.priority,
-                         i.dimensionW, i.dimensionD, i.dimensionH,             -- Original item dimensions
-                         i.placedDimensionW, i.placedDimensionD, i.placedDimensionH, -- Placed dimensions
-                         i.positionX AS posX, i.positionY AS posY, i.positionZ AS posZ,
-                         i.preferredContainerId, i.preferredZone -- Load preferences too
-                  FROM items i
-                  WHERE i.containerId IS NOT NULL AND i.status = 'stowed'";
+try { /* ... (same DB load logic as V9) ... */
+    $sqlPlaced = "SELECT i.itemId, i.containerId, i.priority, i.dimensionW, i.dimensionD, i.dimensionH, i.placedDimensionW, i.placedDimensionD, i.placedDimensionH, i.positionX AS posX, i.positionY AS posY, i.positionZ AS posZ, i.preferredContainerId, i.preferredZone FROM items i WHERE i.containerId IS NOT NULL AND i.status = 'stowed'";
     $stmtPlaced = $db->prepare($sqlPlaced); $stmtPlaced->execute(); $placedItemsResult = $stmtPlaced->fetchAll(PDO::FETCH_ASSOC);
-
     foreach ($placedItemsResult as $item) {
         $containerId = $item['containerId'];
-        if (!isset($existingPlacedItemsByContainer[$containerId])) { $existingPlacedItemsByContainer[$containerId] = []; }
+        if (!isset($existingPlacedItemsByContainer[$containerId])) $existingPlacedItemsByContainer[$containerId] = [];
         $placementData = [ 'id' => $item['itemId'], 'x' => (float)$item['posX'], 'y' => (float)$item['posY'], 'z' => (float)$item['posZ'], 'w' => (float)$item['placedDimensionW'], 'd' => (float)$item['placedDimensionD'], 'h' => (float)$item['placedDimensionH'] ];
         $existingPlacedItemsByContainer[$containerId][] = $placementData;
-
-        // Populate master list with data for existing items
-        $itemsMasterList[$item['itemId']] = [
-            'priority' => (int)($item['priority'] ?? 0),
-            'dimensions_api' => [ // Use original dimensions if available, else placed
-                'width' => (float)($item['dimensionW'] ?: $item['placedDimensionW']),
-                'depth' => (float)($item['dimensionD'] ?: $item['placedDimensionD']),
-                'height' => (float)($item['dimensionH'] ?: $item['placedDimensionH'])
-            ],
-            'placement' => $placementData, // Store current placement
-            'preferredContainerId' => $item['preferredContainerId'] ?? null,
-            'preferredZone' => $item['preferredZone'] ?? null
-         ];
+        $apiWidth = (float)($item['dimensionW'] ?: $item['placedDimensionW']); $apiDepth = (float)($item['dimensionD'] ?: $item['placedDimensionD']); $apiHeight = (float)($item['dimensionH'] ?: $item['placedDimensionH']);
+        $itemDimsApi = null; if ($apiWidth > 0 && $apiDepth > 0 && $apiHeight > 0) { $itemDimsApi = ['width' => $apiWidth, 'depth' => $apiDepth, 'height' => $apiHeight ]; } else { error_log("WARN: Existing item {$item['itemId']} has invalid dims in DB."); }
+        $itemsMasterList[$item['itemId']] = [ 'priority' => (int)($item['priority'] ?? 0), 'dimensions_api' => $itemDimsApi, 'placement' => $placementData, 'preferredContainerId' => $item['preferredContainerId'] ?? null, 'preferredZone' => $item['preferredZone'] ?? null ];
     }
     error_log("Found existing placements for " . count($itemsMasterList) . " items in " . count($existingPlacedItemsByContainer) . " containers from DB.");
 } catch (PDOException $e) { http_response_code(500); $response = ['success' => false, 'message' => 'DB error loading existing items.']; error_log("Placement DB Error (fetch existing): " . $e->getMessage()); echo json_encode($response); $db = null; exit; }
 
-// --- Merge incoming item data into master list (overwriting/adding) ---
-foreach ($itemsToPlaceInput as $item) {
+// --- Merge incoming item data into master list ---
+$validInputItemsCount = 0;
+foreach ($itemsToPlaceInput as $item) { /* ... (same merge logic as V9, ensuring dimensions_api is valid) ... */
     if (isset($item['itemId'])) {
-        $itemId = $item['itemId'];
-        // If item already exists in master list (from DB load), update its details. Otherwise, add it.
-        $itemsMasterList[$itemId] = [
-            'priority' => (int)($item['priority'] ?? ($itemsMasterList[$itemId]['priority'] ?? 0)), // Use new priority if provided
-            'dimensions_api' => [ // Use new dimensions if provided
-                'width' => (float)($item['width'] ?? ($itemsMasterList[$itemId]['dimensions_api']['width'] ?? 0)),
-                'depth' => (float)($item['depth'] ?? ($itemsMasterList[$itemId]['dimensions_api']['depth'] ?? 0)),
-                'height' => (float)($item['height'] ?? ($itemsMasterList[$itemId]['dimensions_api']['height'] ?? 0))
-            ],
-            'placement' => $itemsMasterList[$itemId]['placement'] ?? null, // Keep existing placement if any
-            'preferredContainerId' => $item['preferredContainerId'] ?? ($itemsMasterList[$itemId]['preferredContainerId'] ?? null), // Use new preference if provided
-            'preferredZone' => $item['preferredZone'] ?? ($itemsMasterList[$itemId]['preferredZone'] ?? null)
-         ];
-    }
+        $itemId = $item['itemId']; $validInputItemsCount++;
+        if (!isset($itemsMasterList[$itemId])) { $itemsMasterList[$itemId] = ['priority' => 0, 'dimensions_api' => null, 'placement' => null, 'preferredContainerId' => null, 'preferredZone' => null]; }
+        $newWidth = (float)($item['width'] ?? $itemsMasterList[$itemId]['dimensions_api']['width'] ?? 0); $newDepth = (float)($item['depth'] ?? $itemsMasterList[$itemId]['dimensions_api']['depth'] ?? 0); $newHeight = (float)($item['height'] ?? $itemsMasterList[$itemId]['dimensions_api']['height'] ?? 0);
+        $itemDims = null; if ($newWidth > 0 && $newDepth > 0 && $newHeight > 0) { $itemDims = ['width' => $newWidth, 'depth' => $newDepth, 'height' => $newHeight]; } else { $itemDims = $itemsMasterList[$itemId]['dimensions_api']; /* Keep old if new invalid */ error_log("WARN: Input item $itemId invalid dims."); }
+        $itemsMasterList[$itemId] = [ 'priority' => (int)($item['priority'] ?? $itemsMasterList[$itemId]['priority']), 'dimensions_api' => $itemDims, 'placement' => $itemsMasterList[$itemId]['placement'], 'preferredContainerId' => (!empty($item['preferredContainerId'])) ? $item['preferredContainerId'] : $itemsMasterList[$itemId]['preferredContainerId'], 'preferredZone' => (!empty($item['preferredZone'])) ? $item['preferredZone'] : $itemsMasterList[$itemId]['preferredZone'] ];
+    } else { error_log("Skipping input item missing 'itemId'."); }
 }
-error_log("Items Master List populated/updated. Total items considered: " . count($itemsMasterList));
+error_log("Items Master List updated. Total items: " . count($itemsMasterList));
 
 
 // --- Placement Algorithm Logic ---
-$currentPlacementState = $existingPlacedItemsByContainer; // Start with the loaded state
-$dbUpdates = [];           // Collect DB changes needed {'itemId' => ['action'=>'place'/'move', ...]}
-$rearrangementSteps = [];  // Collect rearrangement steps for the API response [{step:1, action:'move',...}, {step:2, action:'place',...}]
-$stepCounter = 1;          // For ordering rearrangement steps
+$currentPlacementState = $existingPlacedItemsByContainer;
+$dbUpdates = [];           // Collect DB changes [itemId => dbUpdateData]
+$rearrangementSteps = [];  // Collect rearrangement API steps (moves + place)
+$finalPlacements = [];     // Collect successful placements [itemId => placementResponse]
+$stepCounter = 1;
+$processedItemIds = [];
 
-// --- Sorting Incoming Items (Priority High->Low, then Volume Large->Small) ---
-if (!empty($itemsToPlaceInput)) {
-    error_log("Sorting " . count($itemsToPlaceInput) . " incoming items...");
-    usort($itemsToPlaceInput, function($a, $b) use ($itemsMasterList) {
-         // Use priority from the potentially updated itemsMasterList
-         $priorityA = $itemsMasterList[$a['itemId']]['priority'] ?? 0;
-         $priorityB = $itemsMasterList[$b['itemId']]['priority'] ?? 0;
-         if ($priorityA !== $priorityB) { return $priorityB <=> $priorityA; } // Descending Priority
+// --- Filter Items To Be Processed ---
+$itemsToProcess = [];
+foreach ($itemsToPlaceInput as $item) { /* ... (same filtering logic as V9) ... */
+     if (!isset($item['itemId'])) continue; $itemId = $item['itemId'];
+     if (!isset($itemsMasterList[$itemId])) { error_log("Item $itemId from input missing in master. Skipping."); continue; }
+     if ($itemsMasterList[$itemId]['placement'] === null) {
+          if($itemsMasterList[$itemId]['dimensions_api'] === null) { error_log("Item $itemId needs placement but has invalid dims."); $internalErrors[] = ['itemId' => $itemId, 'reason' => 'Invalid dimensions.']; }
+          else { $itemsToProcess[] = $item; }
+     } else { $processedItemIds[$itemId] = true; }
+}
+error_log("Items requiring placement processing: " . count($itemsToProcess));
 
-         // Use dimensions from the potentially updated itemsMasterList
-         $dimsA = $itemsMasterList[$a['itemId']]['dimensions_api'] ?? ['width'=>0,'depth'=>0,'height'=>0];
-         $dimsB = $itemsMasterList[$b['itemId']]['dimensions_api'] ?? ['width'=>0,'depth'=>0,'height'=>0];
-         $volumeA = $dimsA['width'] * $dimsA['depth'] * $dimsA['height'];
-         $volumeB = $dimsB['width'] * $dimsB['depth'] * $dimsB['height'];
-         if (abs($volumeA - $volumeB) > FLOAT_EPSILON) { return $volumeB <=> $volumeA; } // Descending Volume
-
-         return ($a['itemId'] ?? '') <=> ($b['itemId'] ?? ''); // Item ID for tiebreak
+// --- Sort Items To Be Processed ---
+if (!empty($itemsToProcess)) { /* ... (same sorting logic as V9) ... */
+    error_log("Sorting " . count($itemsToProcess) . " items...");
+    usort($itemsToProcess, function($a, $b) use ($itemsMasterList) {
+         $priorityA = $itemsMasterList[$a['itemId']]['priority'] ?? 0; $priorityB = $itemsMasterList[$b['itemId']]['priority'] ?? 0;
+         if ($priorityA !== $priorityB) { return $priorityB <=> $priorityA; }
+         $dimsA = $itemsMasterList[$a['itemId']]['dimensions_api']; $dimsB = $itemsMasterList[$b['itemId']]['dimensions_api'];
+         $volumeA = ($dimsA !== null) ? (($dimsA['width'] ?? 0) * ($dimsA['depth'] ?? 0) * ($dimsA['height'] ?? 0)) : 0;
+         $volumeB = ($dimsB !== null) ? (($dimsB['width'] ?? 0) * ($dimsB['depth'] ?? 0) * ($dimsB['height'] ?? 0)) : 0;
+         if (abs($volumeA - $volumeB) > FLOAT_EPSILON) { return $volumeB <=> $volumeA; }
+         return ($a['itemId'] ?? '') <=> ($b['itemId'] ?? '');
     });
-     error_log("Items sorted. First item to process: " . ($itemsToPlaceInput[0]['itemId'] ?? 'None'));
+     error_log("Items sorted. First: " . ($itemsToProcess[0]['itemId'] ?? 'None'));
 }
 
-// --- Main Placement Loop (Processing sorted incoming items) ---
-foreach ($itemsToPlaceInput as $itemToPlace) {
-    $itemPlaced = false;
-    $currentItemId = $itemToPlace['itemId'] ?? null;
+// --- Split Sorted Items into Priority Tiers ---
+$highPrioItems = []; $mediumPrioItems = []; $lowPrioItems = [];
+foreach ($itemsToProcess as $item) { /* ... (same tier splitting logic as V9) ... */
+    $itemId = $item['itemId']; $prio = $itemsMasterList[$itemId]['priority'];
+    if ($prio >= HIGH_PRIORITY_THRESHOLD) { $highPrioItems[] = $item; }
+    elseif ($prio <= LOW_PRIORITY_THRESHOLD) { $lowPrioItems[] = $item; }
+    else { $mediumPrioItems[] = $item; }
+}
+error_log("Split into tiers: High=" . count($highPrioItems) . ", Medium=" . count($mediumPrioItems) . ", Low=" . count($lowPrioItems));
 
-    // --- Basic Item Validation ---
-    if ($currentItemId === null || !isset($itemsMasterList[$currentItemId])) { error_log("Skipping item - Missing ID or not in Master List: ".json_encode($itemToPlace)); $internalErrors[] = ['itemId' => $currentItemId ?? 'Unknown', 'reason' => 'Invalid item ID or missing master data.']; continue; }
-    $itemMasterData = $itemsMasterList[$currentItemId];
-    $itemDimensionsApi = $itemMasterData['dimensions_api'];
-    if (($itemDimensionsApi['width'] ?? 0) <= 0 || ($itemDimensionsApi['depth'] ?? 0) <= 0 || ($itemDimensionsApi['height'] ?? 0) <= 0) { error_log("Skipping invalid item dimensions for $currentItemId: ".json_encode($itemDimensionsApi)); $internalErrors[] = ['itemId' => $currentItemId, 'reason' => 'Invalid item dimensions (zero or negative).']; continue; }
-    $currentItemPriority = $itemMasterData['priority'];
-    $preferredContainerIdSpecific = $itemMasterData['preferredContainerId'];
-    $preferredZone = $itemMasterData['preferredZone'];
-    error_log("Processing Item $currentItemId (Priority: $currentItemPriority, PrefZone: $preferredZone, PrefCont: $preferredContainerIdSpecific)");
-
-    // --- Determine Container Search Order (Based on Preferences) ---
-    $containersToTryIds = []; $processedIds = [];
-    // 1. Specific preferred container
-    if ($preferredContainerIdSpecific !== null && isset($containerDimensionsMap[$preferredContainerIdSpecific])) { $containersToTryIds[] = $preferredContainerIdSpecific; $processedIds[$preferredContainerIdSpecific] = true; }
-    // 2. Other containers in preferred zone
-    if ($preferredZone !== null) { foreach ($containerDimensionsMap as $cId => $cData) { if (!isset($processedIds[$cId]) && ($cData['zone'] ?? null) === $preferredZone) { $containersToTryIds[] = $cId; $processedIds[$cId] = true; } } }
-    // 3. All remaining containers
-    foreach ($containerDimensionsMap as $cId => $cData) { if (!isset($processedIds[$cId])) { $containersToTryIds[] = $cId; } }
-    error_log("Item $currentItemId: Container search order: " . implode(', ', $containersToTryIds));
-
-
-    // --- Attempt Direct Placement - Find BEST *OVERALL* spot considering preference penalties ---
-    $bestOverallPlacementData = null;   // Holds {'foundX', 'foundY',... 'score'} from findSpaceForItem
-    $bestOverallAdjustedScore = null; // Score used for comparing across containers (includes penalties)
-    $bestOverallContainerId = null;
-    // *** MODIFICATION START 1 ***
-    $idealSpotBlockedInPreferred = false; // *** NEW FLAG ***: Tracks if an ideal spot was blocked in any preferred container
-    // *** MODIFICATION END 1 ***
-
-    foreach ($containersToTryIds as $containerId) {
-        if (!isset($containerDimensionsMap[$containerId])) continue; // Skip invalid container ID
-        $containerDimensionsApi = $containerDimensionsMap[$containerId];
-        $itemsCurrentlyInContainer = $currentPlacementState[$containerId] ?? [];
-        $containerZone = $containerDimensionsMap[$containerId]['zone'] ?? null;
-
-        // Find the best geometric spot *within this specific container*
-        $placementInThisContainer = findSpaceForItem(
-            $currentItemId, $itemDimensionsApi, $currentItemPriority,
-            $containerId, $containerDimensionsApi, $itemsCurrentlyInContainer
-        );
-
-        if ($placementInThisContainer !== null) {
-             $geometricScore = $placementInThisContainer['score'];
-             $adjustedScore = $geometricScore; // Start with geometric score
-
-             // *** MODIFICATION START 2 ***
-             // Determine if this container is preferred for the current item
-             $isCurrentContainerPreferred = false;
-             if ($preferredContainerIdSpecific !== null && $preferredContainerIdSpecific === $containerId) $isCurrentContainerPreferred = true;
-             elseif ($preferredContainerIdSpecific === null && $preferredZone !== null && $containerZone === $preferredZone) $isCurrentContainerPreferred = true;
-             elseif ($preferredContainerIdSpecific === null && $preferredZone === null) $isCurrentContainerPreferred = true; // No preference = all are acceptable
-
-             // Apply Penalty if this container is not preferred
-             if (!$isCurrentContainerPreferred) {
-                 $adjustedScore += PREFERRED_ZONE_SCORE_PENALTY;
-                 error_log("Item $currentItemId: Adjusting score in non-preferred $containerId (Zone: $containerZone). Geom: $geometricScore, Adj: $adjustedScore");
-             } else {
-                  error_log("Item $currentItemId: Score in preferred $containerId (Zone: $containerZone). Geom: $geometricScore, Adj: $adjustedScore");
-                  // *** NEW CHECK ***: If this is a preferred container and the score isn't ideal, flag it.
-                  if ($geometricScore > FLOAT_EPSILON) {
-                      error_log("Item $currentItemId: Ideal spot appears blocked in preferred container $containerId (Score: " . round($geometricScore,2) . " > 0). Setting flag.");
-                      $idealSpotBlockedInPreferred = true;
-                  }
-             }
-
-             // Compare with the best *adjusted* score found so far across all containers
-             if ($bestOverallAdjustedScore === null || $adjustedScore < $bestOverallAdjustedScore) {
-                 error_log("Item $currentItemId: Found NEW best overall spot in $containerId. Adjusted Score: $adjustedScore < Previous Best: " . ($bestOverallAdjustedScore ?? 'N/A'));
-                 $bestOverallAdjustedScore = $adjustedScore;
-                 $bestOverallPlacementData = $placementInThisContainer; // Store the raw placement details
-                 $bestOverallContainerId = $containerId;
-             }
-             // *** MODIFICATION END 2 ***
+// --- Placement Pass 1: High Priority (Rearrangement Enabled) ---
+error_log("--- Starting High Priority Placement Pass ---");
+foreach ($highPrioItems as $itemData) { /* ... (same pass 1 logic as V9) ... */
+    $itemId = $itemData['itemId']; if (isset($processedItemIds[$itemId])) continue;
+    $result = placeSingleItem( $itemData, $itemsMasterList, $containerDimensionsMap, $currentPlacementState, $stepCounter, true ); // Rearr ON
+    $processedItemIds[$itemId] = true;
+    if ($result['success']) {
+        $finalPlacements[$itemId] = $result['placement'];
+        if ($result['dbUpdate']) { $dbUpdates[$itemId] = $result['dbUpdate']; error_log("Item $itemId (High Prio): Placed OK (Direct/Fallback). Reason: " . $result['reason']); }
+        if ($result['rearrangementResult'] && $result['rearrangementResult']['success']) {
+            error_log("Item $itemId (High Prio): Placed OK (Rearrangement). Reason: " . $result['reason']);
+            if (!empty($result['rearrangementResult']['moves'])) { foreach ($result['rearrangementResult']['moves'] as $move) { $rearrangementSteps[] = $move['apiResponse']; $dbUpdates[$move['itemId']] = $move['dbUpdate']; } }
+            if(isset($result['rearrangementResult']['finalPlacement']['apiResponse'])) { $rearrangementSteps[] = $result['rearrangementResult']['finalPlacement']['apiResponse']; }
+            if(isset($result['rearrangementResult']['finalPlacement']['dbUpdate'])) { $dbUpdates[$itemId] = $result['rearrangementResult']['finalPlacement']['dbUpdate']; }
         }
-    } // End loop through containers to try for direct placement
+    } else { error_log("Item $itemId (High Prio): Placement FAILED. Reason: " . $result['reason']); $internalErrors[] = ['itemId' => $itemId, 'reason' => $result['reason']]; }
+}
 
+// --- Placement Pass 2: Medium Priority (Rearrangement Disabled) ---
+error_log("--- Starting Medium Priority Placement Pass ---");
+foreach ($mediumPrioItems as $itemData) { /* ... (same pass 2 logic as V9) ... */
+     $itemId = $itemData['itemId']; if (isset($processedItemIds[$itemId])) continue;
+     $result = placeSingleItem( $itemData, $itemsMasterList, $containerDimensionsMap, $currentPlacementState, $stepCounter, false ); // Rearr OFF
+     $processedItemIds[$itemId] = true;
+     if ($result['success']) {
+         $finalPlacements[$itemId] = $result['placement'];
+         if ($result['dbUpdate']) { $dbUpdates[$itemId] = $result['dbUpdate']; error_log("Item $itemId (Medium Prio): Placed OK. Reason: " . $result['reason']); }
+         else { error_log("Item $itemId (Medium Prio): Success but no DB update? Reason: " . $result['reason']); $internalErrors[] = ['itemId' => $itemId, 'reason' => 'Success but no DB update']; }
+     } else { error_log("Item $itemId (Medium Prio): Placement FAILED. Reason: " . $result['reason']); $internalErrors[] = ['itemId' => $itemId, 'reason' => $result['reason']]; }
+}
 
-    // --- Process the Best Found Spot (Direct Placement or Trigger Rearrangement) ---
-    $triggerRearrangement = false;
-    if ($bestOverallPlacementData !== null) {
-        // A spot was found. Determine if the CHOSEN spot is preferred.
-        $chosenContainerId = $bestOverallContainerId;
-        $chosenContainerZone = $containerDimensionsMap[$chosenContainerId]['zone'] ?? null;
-        $isChosenSpotPreferred = false; // Recalculate preference for the CHOSEN spot
-        if ($preferredContainerIdSpecific !== null && $preferredContainerIdSpecific === $chosenContainerId) $isChosenSpotPreferred = true;
-        elseif ($preferredContainerIdSpecific === null && $preferredZone !== null && $chosenContainerZone === $preferredZone) $isChosenSpotPreferred = true;
-        elseif ($preferredContainerIdSpecific === null && $preferredZone === null) $isChosenSpotPreferred = true;
+// --- Placement Pass 3: Low Priority (Rearrangement Disabled) ---
+error_log("--- Starting Low Priority Placement Pass ---");
+foreach ($lowPrioItems as $itemData) { /* ... (same pass 3 logic as V9) ... */
+     $itemId = $itemData['itemId']; if (isset($processedItemIds[$itemId])) continue;
+     $result = placeSingleItem( $itemData, $itemsMasterList, $containerDimensionsMap, $currentPlacementState, $stepCounter, false ); // Rearr OFF
+     $processedItemIds[$itemId] = true;
+      if ($result['success']) {
+         $finalPlacements[$itemId] = $result['placement'];
+          if ($result['dbUpdate']) { $dbUpdates[$itemId] = $result['dbUpdate']; error_log("Item $itemId (Low Prio): Placed OK. Reason: " . $result['reason']); }
+          else { error_log("Item $itemId (Low Prio): Success but no DB update? Reason: " . $result['reason']); $internalErrors[] = ['itemId' => $itemId, 'reason' => 'Success but no DB update']; }
+     } else { error_log("Item $itemId (Low Prio): Placement FAILED. Reason: " . $result['reason']); $internalErrors[] = ['itemId' => $itemId, 'reason' => $result['reason']]; }
+}
 
-        // *** MODIFICATION START 3 ***
-        // --- REVISED REARRANGEMENT TRIGGER LOGIC ---
-        if ($currentItemPriority >= HIGH_PRIORITY_THRESHOLD) {
-            // Condition 1: The best overall spot found is NOT preferred at all.
-            if (!$isChosenSpotPreferred) {
-                 error_log("Item $currentItemId (High Prio): Best direct spot found in $chosenContainerId (Zone: $chosenContainerZone) is NOT preferred. Triggering rearrangement attempt.");
-                 $triggerRearrangement = true;
-            }
-            // Condition 2: The best overall spot IS preferred, BUT we detected earlier that an ideal spot was blocked in AT LEAST ONE preferred container.
-            elseif ($idealSpotBlockedInPreferred) {
-                 error_log("Item $currentItemId (High Prio): Best spot chosen is $chosenContainerId (preferred), but an ideal spot was blocked in some preferred container earlier. Triggering rearrangement attempt.");
-                 $triggerRearrangement = true;
-            }
-            // Else: High priority, the chosen spot is preferred, AND no ideal spots were blocked in any preferred container -> Place directly check below.
-        }
+// --- V10 Addition: Refinement Swap Pass ---
+$refinementResult = refinePlacementsBySwapping(
+    $currentPlacementState, // Pass by reference
+    $itemsMasterList,
+    $stepCounter            // Pass by reference
+);
 
-        // --- Decision: Place Directly or Let Rearrangement Handle ---
-        if (!$triggerRearrangement) {
-            // Acceptable direct placement! (Includes non-high-prio items, or high-prio items getting their ideal preferred spot without needing rearrangement)
-            $foundX = (float)$bestOverallPlacementData['foundX']; $foundY = (float)$bestOverallPlacementData['foundY']; $foundZ = (float)$bestOverallPlacementData['foundZ'];
-            $placedW = (float)$bestOverallPlacementData['placedW']; $placedD = (float)$bestOverallPlacementData['placedD']; $placedH = (float)$bestOverallPlacementData['placedH'];
-            $geometricScoreOfBestSpot = $bestOverallPlacementData['score']; // Get score for logging
-            error_log("Item $currentItemId: Placing directly in $chosenContainerId at (Y=$foundY, Z=$foundZ, X=$foundX). Adjusted Score: $bestOverallAdjustedScore. Preferred: " . ($isChosenSpotPreferred ? 'Yes' : 'No') . ". Score: " . round($geometricScoreOfBestSpot, 2));
-
-
-            // Add to DB Updates, API Response, and In-Memory State
-            $dbUpdates[$currentItemId] = ['action' => 'place', 'itemId' => $currentItemId, 'containerId' => $chosenContainerId, 'positionX' => $foundX, 'positionY' => $foundY, 'positionZ' => $foundZ, 'placedDimensionW' => $placedW, 'placedDimensionD' => $placedD, 'placedDimensionH' => $placedH ];
-            $response['placements'][] = ['itemId' => $currentItemId, 'containerId' => $chosenContainerId, 'position' => formatApiPosition($foundX, $foundY, $foundZ, $placedW, $placedD, $placedH) ];
-            if (!isset($currentPlacementState[$chosenContainerId])) { $currentPlacementState[$chosenContainerId] = []; }
-            $currentPlacementState[$chosenContainerId][] = [ 'id' => $currentItemId, 'x' => $foundX, 'y' => $foundY, 'z' => $foundZ, 'w' => $placedW, 'd' => $placedD, 'h' => $placedH ];
-            $currentPlacementState[$chosenContainerId] = array_values($currentPlacementState[$chosenContainerId]); // Re-index
-
-            $itemPlaced = true;
-        }
-        // If $triggerRearrangement is true, we skip direct placement here and let the rearrangement block handle it later.
-         // *** MODIFICATION END 3 ***
-
-    } else {
-        // No direct placement spot found anywhere
-        error_log("Item $currentItemId: No direct placement spot found in any container.");
-        // Trigger rearrangement if high priority AND has preferences (otherwise rearrangement can't target anything)
-         if ($currentItemPriority >= HIGH_PRIORITY_THRESHOLD && ($preferredContainerIdSpecific !== null || $preferredZone !== null)) {
-            error_log("Item $currentItemId (High Prio): Triggering rearrangement attempt as no direct spot was found.");
-            $triggerRearrangement = true;
-        }
+// Merge results from refinement pass
+if (!empty($refinementResult['swapApiMoves'])) {
+    $rearrangementSteps = array_merge($rearrangementSteps, $refinementResult['swapApiMoves']);
+}
+if (!empty($refinementResult['swapDbUpdates'])) {
+    // Merge swap DB updates, potentially overwriting previous updates for swapped items
+    foreach ($refinementResult['swapDbUpdates'] as $itemId => $updateData) {
+        $dbUpdates[$itemId] = $updateData;
     }
-    // --- End processing best overall placement ---
+    error_log("Refinement Pass: Merged " . count($refinementResult['swapDbUpdates']) . " DB updates from swaps.");
+}
+// Update $finalPlacements if items were swapped?
+// The $finalPlacements array holds the *initial* successful placement.
+// The $rearrangementSteps now includes the *moves* to the final swapped positions.
+// The $dbUpdates holds the *final* state for the DB.
+// This seems consistent. The 'placements' response shows where things initially went,
+// and 'rearrangements' shows the moves (including swaps) to get to the final state.
 
 
-    // --- Attempt Rearrangement IF flagged ---
-    if ($triggerRearrangement) {
-        // This is only triggered if $currentItemPriority >= HIGH_PRIORITY_THRESHOLD
-        error_log("Item $currentItemId (High Prio): Initiating rearrangement logic...");
-
-        $rearrangementResult = attemptRearrangementForHighPriorityItem(
-            $currentItemId,
-            $itemDimensionsApi,
-            $currentItemPriority,
-            $preferredContainerIdSpecific,
-            $preferredZone,
-            $containerDimensionsMap,    // Pass all container info
-            $currentPlacementState,     // Pass full current state
-            $itemsMasterList,           // Pass master list for priorities/dims
-            $stepCounter                // Pass current step counter
-        );
-
-        if ($rearrangementResult['success']) {
-            error_log("Item $currentItemId: Rearrangement SUCCEEDED. Applying changes.");
-            $itemPlaced = true;
-            $finalPlacement = $rearrangementResult['finalPlacement'];
-            $moves = $rearrangementResult['moves'];
-            $newState = $rearrangementResult['newState'];
-            $stepCounter = $rearrangementResult['nextStep']; // Update step counter
-
-            // 1. Add MOVES to response and DB updates
-            foreach ($moves as $move) {
-                $rearrangementSteps[] = $move['apiResponse']; // Add to API response steps
-                $dbUpdates[$move['itemId']] = $move['dbUpdate'];   // Add/overwrite DB update for the moved item
-            }
-            // 2. Add FINAL PLACEMENT to response and DB updates
-            $rearrangementSteps[] = $finalPlacement['apiResponse']; // Add placement as the last step for this item
-            $dbUpdates[$currentItemId] = $finalPlacement['dbUpdate']; // Add/overwrite DB update for the placed item
-            $response['placements'][] = $finalPlacement['placementResponse']; // Add to main placements list
-
-            // 3. CRITICAL: Update the master in-memory state for subsequent items
-            $currentPlacementState = $newState;
-            error_log("Item $currentItemId: In-memory state updated after successful rearrangement.");
-
-        } else {
-            error_log("Item $currentItemId: Rearrangement FAILED. Reason: " . $rearrangementResult['reason']);
-            // Item remains unplaced, state remains unchanged from before the attempt
-        }
-
-    } // End rearrangement attempt block
-
-
-    // --- Final Check for Placement Failure ---
-    if (!$itemPlaced) {
-        $failReason = ($currentItemPriority >= HIGH_PRIORITY_THRESHOLD && $triggerRearrangement)
-            ? 'No suitable placement space found even after rearrangement attempt.'
-            : 'No suitable placement space found.';
-        error_log("Item $currentItemId: Placement FAILED. $failReason");
-        $internalErrors[] = ['itemId' => $currentItemId, 'reason' => $failReason];
-    }
-
-} // End main item loop
+// Final results for response object
+$response['placements'] = array_values($finalPlacements);
+$response['rearrangements'] = $rearrangementSteps;
 
 
 // --- Update Database ---
-$updatedCount = 0;
-$dbUpdateFailed = false;
-$actuallyUpdatedIds = [];
-if (!empty($dbUpdates)) {
-    error_log("DB Update Prep: Processing " . count($dbUpdates) . " placement/move actions.");
-    // Note: $dbUpdates should already contain the final intended state for each affected item ID.
-    // If an item was moved then placed, the 'place' action would overwrite the 'move' for that ID.
-
-    $updateSql = "UPDATE items SET
-                    containerId = :containerId,
-                    positionX = :positionX, positionY = :positionY, positionZ = :positionZ,
-                    placedDimensionW = :placedW, placedDimensionD = :placedD, placedDimensionH = :placedH,
-                    status = 'stowed', lastUpdated = :lastUpdated
-                  WHERE itemId = :itemId";
+$updatedCount = 0; $dbUpdateFailed = false; $actuallyUpdatedIds = [];
+if (!empty($dbUpdates)) { /* ... (same DB update logic as V9) ... */
+    error_log("DB Update Prep: Processing " . count($dbUpdates) . " final placement/move actions.");
+    $updateSql = "UPDATE items SET containerId = :containerId, positionX = :positionX, positionY = :positionY, positionZ = :positionZ, placedDimensionW = :placedW, placedDimensionD = :placedD, placedDimensionH = :placedH, status = 'stowed', lastUpdated = :lastUpdated WHERE itemId = :itemId";
     try {
         $db->beginTransaction();
         $updateStmt = $db->prepare($updateSql);
         $lastUpdated = date(DB_DATETIME_FORMAT);
-
-        // Prepare bound variables
-        $bind_containerId = null; $bind_posX = null; $bind_posY = null; $bind_posZ = null;
-        $bind_placedW = null; $bind_placedD = null; $bind_placedH = null; $bind_itemId = null;
-        $updateStmt->bindParam(':containerId', $bind_containerId);
-        $updateStmt->bindParam(':positionX', $bind_posX); $updateStmt->bindParam(':positionY', $bind_posY); $updateStmt->bindParam(':positionZ', $bind_posZ);
-        $updateStmt->bindParam(':placedW', $bind_placedW); $updateStmt->bindParam(':placedD', $bind_placedD); $updateStmt->bindParam(':placedH', $bind_placedH);
-        $updateStmt->bindParam(':lastUpdated', $lastUpdated);
-        $updateStmt->bindParam(':itemId', $bind_itemId, PDO::PARAM_STR);
+        $bind_containerId = null; $bind_posX = null; $bind_posY = null; $bind_posZ = null; $bind_placedW = null; $bind_placedD = null; $bind_placedH = null; $bind_itemId = null;
+        $updateStmt->bindParam(':containerId', $bind_containerId); $updateStmt->bindParam(':positionX', $bind_posX); $updateStmt->bindParam(':positionY', $bind_posY); $updateStmt->bindParam(':positionZ', $bind_posZ); $updateStmt->bindParam(':placedW', $bind_placedW); $updateStmt->bindParam(':placedD', $bind_placedD); $updateStmt->bindParam(':placedH', $bind_placedH); $updateStmt->bindParam(':lastUpdated', $lastUpdated); $updateStmt->bindParam(':itemId', $bind_itemId, PDO::PARAM_STR);
 
         foreach ($dbUpdates as $itemId => $updateData) {
-            // Ensure all necessary keys exist (belt and braces)
-             if (!isset($updateData['action'], $updateData['itemId'], $updateData['containerId'], $updateData['positionX'], $updateData['positionY'], $updateData['positionZ'], $updateData['placedDimensionW'], $updateData['placedDimensionD'], $updateData['placedDimensionH'])) {
-                 error_log("DB Update Skip: Incomplete data for item $itemId: " . json_encode($updateData));
-                 continue;
-             }
-
-            $bind_containerId = $updateData['containerId'];
-            $bind_posX = $updateData['positionX']; $bind_posY = $updateData['positionY']; $bind_posZ = $updateData['positionZ'];
-            $bind_placedW = $updateData['placedDimensionW']; $bind_placedD = $updateData['placedDimensionD']; $bind_placedH = $updateData['placedDimensionH'];
-            $bind_itemId = $updateData['itemId']; // Should match $itemId key
-
+             if (!isset($updateData['action'], $updateData['itemId'], $updateData['containerId'], $updateData['positionX'], $updateData['positionY'], $updateData['positionZ'], $updateData['placedDimensionW'], $updateData['placedDimensionD'], $updateData['placedDimensionH']) || $updateData['itemId'] !== $itemId ) { error_log("DB Update Skip: Incomplete data for item $itemId: " . json_encode($updateData)); continue; }
+            $bind_containerId = $updateData['containerId']; $bind_posX = $updateData['positionX']; $bind_posY = $updateData['positionY']; $bind_posZ = $updateData['positionZ']; $bind_placedW = $updateData['placedDimensionW']; $bind_placedD = $updateData['placedDimensionD']; $bind_placedH = $updateData['placedDimensionH']; $bind_itemId = $updateData['itemId'];
             if ($updateStmt->execute()) {
                 $rowCount = $updateStmt->rowCount();
-                if ($rowCount > 0) {
-                    $updatedCount++; $actuallyUpdatedIds[] = $bind_itemId;
-                     error_log("DB Update OK for Item $bind_itemId (Action: {$updateData['action']})");
-                } else {
-                    // This might happen if the item's state in the DB was already what we tried to set it to. Not necessarily an error.
-                    error_log("DB Update WARN: Execute OK but 0 rows affected for item: $bind_itemId. State might have been unchanged.");
-                     // Optionally add to internalErrors if this is unexpected
-                     //$internalErrors[] = ['itemId' => $bind_itemId, 'reason' => 'DB update executed but affected 0 rows.'];
-                }
-            } else {
-                 $errorInfo = $updateStmt->errorInfo();
-                 $errorMsg = "DB Update FAIL for itemId: " . $bind_itemId . " - Error: " . ($errorInfo[2] ?? 'Unknown PDO Error');
-                 error_log($errorMsg);
-                 throw new PDOException($errorMsg); // Trigger rollback
-            }
+                if ($rowCount > 0) { $updatedCount++; $actuallyUpdatedIds[] = $bind_itemId; /* error_log("DB Update OK for Item $bind_itemId"); */ }
+                else { error_log("DB Update WARN: 0 rows affected for item: $bind_itemId."); }
+            } else { $errorInfo = $updateStmt->errorInfo(); $errorMsg = "DB Update FAIL for itemId: " . $bind_itemId . " - Error: " . ($errorInfo[2] ?? 'Unknown PDO Error'); error_log($errorMsg); throw new PDOException($errorMsg); }
         }
         $db->commit();
-        error_log("DB Update Commit: Transaction committed. Items affected in DB: $updatedCount. IDs: " . implode(', ', $actuallyUpdatedIds));
-        if (!$dbUpdateFailed) $response['success'] = true; // Mark success if commit is reached
+        error_log("DB Update Commit: Transaction committed. Items affected: $updatedCount. IDs: " . implode(', ', $actuallyUpdatedIds));
+        // Set final success based on placement/rearrangement results
+        if (!empty($response['placements']) || !empty($response['rearrangements'])) { $response['success'] = true; }
+        else if (count($itemsToProcess) === 0 && empty($internalErrors)) { $response['success'] = true; $response['message'] = "No items required placement."; }
+        else { $response['success'] = false; $response['message'] = "Placement completed, but no items placed/rearranged."; }
 
     } catch (PDOException $e) {
-         if ($db->inTransaction()) { $db->rollBack(); error_log("DB Update ROLLED BACK due to error."); }
-         http_response_code(500);
-         $response['success'] = false; $response['placements'] = []; $response['rearrangements'] = []; // Clear results on DB failure
-         $response['message'] = "DB update failed during placement. Transaction rolled back.";
-         error_log("Placement DB Error (update execution): " . $e->getMessage());
-         $dbUpdateFailed = true;
+         if ($db->inTransaction()) { $db->rollBack(); error_log("DB Update ROLLED BACK."); }
+         http_response_code(500); $response['success'] = false; $response['placements'] = []; $response['rearrangements'] = [];
+         $response['message'] = "DB update failed. Transaction rolled back."; error_log("Placement DB Error (update): " . $e->getMessage()); $dbUpdateFailed = true;
     }
 } else {
-     // No DB updates were generated. Check if this is expected.
-     if (count($itemsToPlaceInput) === 0) {
-         $response['success'] = true; $response['message'] = "No items provided for placement.";
-         error_log("No DB updates needed: No items in input.");
-     } elseif (!empty($response['placements']) || !empty($rearrangementSteps)) { // Consider rearrangements as success too
-          // Items were placed/moved in the simulation, but perhaps their state didn't change from DB load?
-          $response['success'] = true;
-          $response['message'] = $response['message'] ?? "Placement simulation complete. No database changes were required.";
-          error_log("No DB updates generated, but placements/rearrangements exist in response (likely no state change needed or only moves occurred).");
-     } else {
-         // No placements and no DB updates - means nothing could be placed.
-         $response['success'] = false; // Keep success false if items were provided but none placed.
-         $response['message'] = $response['message'] ?? "No suitable space found for any provided items.";
-          error_log("No DB updates generated: No items were successfully placed or rearranged.");
-     }
+     // No DB updates needed - set success based on results
+     if (!empty($response['placements']) || !empty($response['rearrangements'])) { $response['success'] = true; }
+     else if (count($itemsToProcess) === 0 && empty($internalErrors)) { $response['success'] = true; $response['message'] = $response['message'] ?? "No items required placement."; }
+     else { $response['success'] = false; $response['message'] = $response['message'] ?? "Placement completed, but no items placed/rearranged."; }
+     error_log("No DB updates needed.");
 }
-// --- End Database Update ---
 
 
 // --- Finalize and Echo Response ---
-if (!$dbUpdateFailed) {
-     // Determine final success based on whether any *requested* items were placed/moved, or if no items were requested.
-     $attemptedCount = count($itemsToPlaceInput);
-     $placedCount = count($response['placements'] ?? []);
-     $finalSuccess = ($attemptedCount === 0 || $placedCount > 0 || !empty($rearrangementSteps)); // Success if no items, or items placed, or items moved
+if (!$dbUpdateFailed) { /* ... (same finalization logic as V9) ... */
+     $attemptedCount = count($itemsToProcess); $placedCount = count($response['placements'] ?? []);
+     $swapCount = count($refinementResult['swapApiMoves'] ?? []) / 2; // Each swap adds 2 moves
 
-     $response['success'] = $finalSuccess;
-
-     $rearrangedCount = 0; // Count actual 'move' steps
-     foreach($rearrangementSteps as $step) { if($step['action'] === 'move') $rearrangedCount++; }
-
-     if ($finalSuccess) {
-         if ($attemptedCount > 0 && $placedCount < $attemptedCount && empty($rearrangementSteps)) { // Only show partial if NO rearrangements involved for the failed items
-             http_response_code(207); // Multi-Status
-             $response['message'] = $response['message'] ?? "Placement partially successful. Placed: $placedCount/" . $attemptedCount . ".";
-         } elseif ($attemptedCount > 0 && $placedCount == 0 && !empty($rearrangementSteps)) {
-             http_response_code(200); // OK - Rearrangement occurred, but maybe only moves, no final placement of input items
-             $response['message'] = $response['message'] ?? "Placement process included rearrangements.";
+     if ($response['success']) {
+         if ($attemptedCount > 0 && $placedCount < $attemptedCount) {
+             http_response_code(207); $response['message'] = $response['message'] ?? "Placement partially successful. Placed: $placedCount/" . $attemptedCount . ".";
+         } else {
+              http_response_code(200); $response['message'] = $response['message'] ?? ($attemptedCount > 0 ? "Placement successful." : "No items required placement.");
          }
-         else {
-              http_response_code(200); // OK
-              $response['message'] = $response['message'] ?? ($attemptedCount > 0 ? "Placement successful." : "No items requested for placement.");
-         }
-          if (!empty($rearrangementSteps)) {
-              $response['message'] .= " (" . count($rearrangementSteps) . " rearrangement steps, including $rearrangedCount moves)";
+          if (!empty($response['rearrangements'])) {
+              $moveCount = 0; foreach($response['rearrangements'] as $step) { if($step['action'] === 'move') $moveCount++; }
+              $response['message'] .= " Includes " . count($response['rearrangements']) . " rearrangement/swap steps (" . $moveCount . " moves, " . $swapCount . " swaps).";
           }
      } else {
-          // Ensure appropriate error code if not already set
-          if (http_response_code() < 400) { http_response_code(422); } // Unprocessable Entity / Bad Request
-          $response['message'] = $response['message'] ?? "Placement failed. No items could be placed or rearranged.";
+          if (http_response_code() < 400) { http_response_code(422); }
+          $response['message'] = $response['message'] ?? "Placement failed.";
      }
-
-     if (!empty($internalErrors)) { $response['warnings'] = $internalErrors; }
-     // Ensure rearrangements are in the response
-     $response['rearrangements'] = $rearrangementSteps;
+     if (!empty($internalErrors)) { $response['warnings'] = $internalErrors; if($response['success'] && $attemptedCount > 0 && $placedCount < $attemptedCount) { $response['message'] .= " See warnings."; } elseif(!$response['success']) { $response['message'] .= " See warnings for details."; } }
 }
 
 // --- Logging Summary ---
-$finalResponseSuccess = $response['success'] ?? false;
-$finalHttpMessage = $response['message'] ?? null;
-$finalDbUpdatesAttempted = count($dbUpdates);
-try { if ($db) {
+$finalResponseSuccess = $response['success'] ?? false; $finalHttpMessage = $response['message'] ?? null;
+$finalDbUpdatesAttempted = count($dbUpdates); $finalPlacedCount = count($response['placements'] ?? []);
+$finalRearrangementCount = count($response['rearrangements'] ?? []); $finalWarningCount = count($response['warnings'] ?? $internalErrors);
+$finalSwapCount = count($refinementResult['swapApiMoves'] ?? []) / 2;
+
+try { /* ... (same logging logic as V9, maybe add swap count) ... */
+    if ($db) {
         $logSql = "INSERT INTO logs (userId, actionType, detailsJson, timestamp) VALUES (:userId, :actionType, :details, :timestamp)"; $logStmt = $db->prepare($logSql);
         $logDetails = [
              'operationType' => 'placement', 'algorithm' => PLACEMENT_ALGORITHM_NAME,
-             'requestItemCount' => count($itemsToPlaceInput),
+             'requestInputItemCount' => count($itemsToPlaceInput), 'itemsAttemptedProcessing' => count($itemsToProcess),
              'responseSuccess' => $finalResponseSuccess, 'httpStatusCode' => http_response_code(),
-             'itemsPlacedCount' => count($response['placements'] ?? []),
+             'itemsPlacedCount' => $finalPlacedCount,
              'dbUpdatesAttempted' => $finalDbUpdatesAttempted, 'dbUpdatesSuccessful' => $updatedCount,
-             'rearrangementStepsCount' => count($response['rearrangements'] ?? []),
-             'internalErrorsCount' => count($internalErrors), 'finalMessage' => $finalHttpMessage
+             'rearrangementStepsCount' => $finalRearrangementCount, 'swapRefinementCount' => $finalSwapCount, // Added swap count
+             'warningsOrErrorsCount' => $finalWarningCount, 'finalMessage' => $finalHttpMessage
          ];
-        $logParams = [
-             ':userId' => 'System_PlacementAPI_V7RT', ':actionType' => 'placement_v7_rt', // Slightly updated ID/Type
-             ':details' => json_encode($logDetails, JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR),
-             ':timestamp' => date(DB_DATETIME_FORMAT)
-         ];
-        if (!$logStmt->execute($logParams)) { error_log("CRITICAL: Failed to execute placement log query!"); }
- } } catch (Exception $logEx) { error_log("CRITICAL: Failed to log placement action! Error: " . $logEx->getMessage()); }
-
+        $logParams = [ ':userId' => 'System_PlacementAPI_V10RS', ':actionType' => 'placement_v10_rs', ':details' => json_encode($logDetails, JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR), ':timestamp' => date(DB_DATETIME_FORMAT) ];
+        if (!$logStmt->execute($logParams)) { error_log("CRITICAL: Failed to execute placement summary log query!"); }
+    }
+ } catch (Exception $logEx) { error_log("CRITICAL: Failed during placement summary logging! Error: " . $logEx->getMessage()); }
 
 // --- Send Output ---
 if (!headers_sent()) { header('Content-Type: application/json; charset=UTF-8'); }
-
-// Construct final response object cleanly
-$finalResponsePayload = [
-    'success' => $finalResponseSuccess,
-    'placements' => $response['placements'] ?? [],
-    'rearrangements' => $response['rearrangements'] ?? []
-];
-if ($finalHttpMessage !== null) { $finalResponsePayload['message'] = $finalHttpMessage; }
+$finalResponsePayload = [ 'success' => $response['success'], 'placements' => $response['placements'] ?? [], 'rearrangements' => $response['rearrangements'] ?? [] ];
+if (isset($response['message'])) { $finalResponsePayload['message'] = $response['message']; }
 if (!empty($response['warnings'])) { $finalResponsePayload['warnings'] = $response['warnings']; }
-
 echo json_encode($finalResponsePayload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
-error_log(PLACEMENT_ALGORITHM_NAME . " Finished. Success: " . ($finalResponseSuccess ? 'Yes' : 'No') . ". Placed: " . count($finalResponsePayload['placements']) . ". Rearrangement Steps: " . count($finalResponsePayload['rearrangements']) . ". Attempted: " . count($itemsToPlaceInput) . ". DB Updates: $updatedCount/$finalDbUpdatesAttempted. Warnings: " . count($internalErrors) . ". HTTP Code: " . http_response_code());
-$db = null; // Close connection implicitly
-exit();
+error_log(PLACEMENT_ALGORITHM_NAME . " Finished. HTTP Code: " . http_response_code() . ". Success: " . ($finalResponsePayload['success'] ? 'Yes' : 'No') . ". Placed: " . count($finalResponsePayload['placements']) . ". Rearr Steps: " . count($finalResponsePayload['rearrangements']) . " (Swaps: " . $finalSwapCount . "). Attempted: " . count($itemsToProcess) . ". DB Updates: $updatedCount/$finalDbUpdatesAttempted. Warnings: " . count($finalResponsePayload['warnings'] ?? []) . ".");
+$db = null; exit();
 
 ?>
