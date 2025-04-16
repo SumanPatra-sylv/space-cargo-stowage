@@ -1,9 +1,8 @@
-<?php // backend/search.php (Revised to find non-stowed items)
+<?php // backend/search.php (Corrected Obstruction Logic & Debug Logging)
 
 require_once __DIR__ . '/database.php'; // Defines getDbConnection()
 
-// --- Helper Function for Y/Z Overlap ---
-// (Keep this function exactly as it was - it's needed for obstruction checks)
+// --- Helper Function for Y/Z Overlap (Used for original incorrect logic, might remove later if unused) ---
 function doBoxesOverlapYZ(array $box1, array $box2): bool {
     $keys = ['y', 'z', 'd', 'h'];
     foreach ($keys as $key) { if (!isset($box1[$key]) || !isset($box2[$key])) { error_log("doBoxesOverlapYZ Warning: Missing key '$key'."); return false; } }
@@ -14,24 +13,62 @@ function doBoxesOverlapYZ(array $box1, array $box2): bool {
 }
 // --- End Helper Function ---
 
+// ---> START: New Helper Function for X/Z Overlap <---
+/**
+ * Checks if two boxes overlap in the X (width) and Z (height) dimensions.
+ * Assumes boxes are arrays with 'x', 'z', 'w', 'h' keys.
+ */
+function doBoxesOverlapXZ(array $box1, array $box2): bool {
+    // Ensure necessary keys exist
+    $keys = ['x', 'z', 'w', 'h'];
+    foreach ($keys as $key) {
+        if (!isset($box1[$key]) || !isset($box2[$key])) {
+             error_log("doBoxesOverlapXZ Warning: Missing key '$key'. Box1: " . print_r($box1, true) . " Box2: " . print_r($box2, true));
+             return false; // Cannot determine overlap if keys are missing
+        }
+    }
+    $epsilon = 0.001; // Tolerance for floating point comparisons
+
+    // Check for overlap on X axis
+    $xOverlap = ($box1['x'] < $box2['x'] + $box2['w'] - $epsilon) && ($box1['x'] + $box1['w'] > $box2['x'] + $epsilon);
+
+    // Check for overlap on Z axis
+    $zOverlap = ($box1['z'] < $box2['z'] + $box2['h'] - $epsilon) && ($box1['z'] + $box1['h'] > $box2['z'] + $epsilon);
+
+    // Overlap occurs if they overlap on BOTH X and Z axes
+    return $xOverlap && $zOverlap;
+}
+// ---> END: New Helper Function <---
+
 
 // --- Helper Function to Format Position for API ---
-// (Keep this function exactly as it was - it's needed for response formatting)
-function formatPositionForApi(array $internalBoxData): array {
-     $startW = $internalBoxData['x']; $startD = $internalBoxData['y']; $startH = $internalBoxData['z'];
-     $placedW = $internalBoxData['w']; $placedD = $internalBoxData['d']; $placedH = $internalBoxData['h'];
-     return [
-         'startCoordinates' => ['width' => $startW, 'depth' => $startD, 'height' => $startH],
-         'endCoordinates' => ['width' => $startW + $placedW, 'depth' => $startD + $placedD, 'height' => $startH + $placedH]
-     ];
+function formatPositionForApi(?array $internalBoxData): ?array { // Allow null input
+     if ($internalBoxData === null) return null; // Return null if no box data
+
+     // Ensure keys exist before using them
+     $startW = $internalBoxData['x'] ?? null; $startD = $internalBoxData['y'] ?? null; $startH = $internalBoxData['z'] ?? null;
+     $placedW = $internalBoxData['w'] ?? null; $placedD = $internalBoxData['d'] ?? null; $placedH = $internalBoxData['h'] ?? null;
+
+     // Only return position if all parts are valid numbers
+     if (is_numeric($startW) && is_numeric($startD) && is_numeric($startH) &&
+         is_numeric($placedW) && is_numeric($placedD) && is_numeric($placedH) ) {
+         return [
+             'startCoordinates' => ['width' => (float)$startW, 'depth' => (float)$startD, 'height' => (float)$startH],
+             'endCoordinates' => ['width' => (float)$startW + (float)$placedW, 'depth' => (float)$startD + (float)$placedD, 'height' => (float)$startH + (float)$placedH]
+         ];
+     }
+     return null; // Return null if data is incomplete/invalid
 }
 // --- End Helper Function ---
 
 
 // --- Main Search Logic ---
-$itemId = $_GET['itemId'] ?? null;
-$itemName = $_GET['itemName'] ?? null;
-$userId = $_GET['userId'] ?? null; // Optional user context
+// ---> FIX: Trim input parameters <---
+$itemId = isset($_GET['itemId']) ? trim($_GET['itemId']) : null;
+$itemName = isset($_GET['itemName']) ? trim($_GET['itemName']) : null;
+$userId = isset($_GET['userId']) ? trim($_GET['userId']) : null; // Optional user context
+// ---> END FIX <---
+
 $db = null; // Initialize DB variable
 
 try {
@@ -40,7 +77,6 @@ try {
     if (empty($itemId) && empty($itemName)) { throw new Exception("Missing required parameter: itemId or itemName", 400); }
 
     // --- Step 1: Find item by ID or Name, regardless of status ---
-    // Join with containers to get zone information if available
     $findSql = "SELECT i.*, c.zone
                 FROM items i
                 LEFT JOIN containers c ON i.containerId = c.containerId
@@ -50,141 +86,127 @@ try {
         $findSql .= "i.itemId = :itemId";
         $params[':itemId'] = $itemId;
     } else {
-        $findSql .= "i.name LIKE :itemName"; // Use LIKE for flexible name search
+        $findSql .= "i.name LIKE :itemName";
         $params[':itemName'] = '%' . $itemName . '%';
     }
-    $findSql .= " LIMIT 1"; // Usually expect one item per ID/Name for this search type
+    $findSql .= " LIMIT 1";
 
     $stmt = $db->prepare($findSql);
     $stmt->execute($params);
-    $itemData = $stmt->fetch(PDO::FETCH_ASSOC); // Fetch the single potential item
+    $itemData = $stmt->fetch(PDO::FETCH_ASSOC);
     // --- End Step 1 ---
 
     // --- Step 2: Check if item was found ---
     if (!$itemData) {
-        http_response_code(200); // Request OK, just no results
+        http_response_code(200);
         echo json_encode(['success' => true, 'found' => false, 'item' => null, 'retrievalSteps' => []]);
-        exit; // Important to exit after sending response
+        exit;
     }
+    // ---> FIX: Add Debug Logging <---
+    error_log("Search Debug: Fetched Data for ID/Name [" . ($itemId ?? $itemName) . "]: " . print_r($itemData, true));
+    // ---> END FIX <---
     // --- End Step 2 ---
 
 
     // --- Step 3: Item Found - Check Status and Calculate Retrieval Steps if Needed ---
-    $retrievalSteps = []; // Default to no steps
-    $obstructionCount = 0; // Default count
-    $targetItemBox = null; // Initialize target box data
+    $retrievalSteps = []; $obstructionCount = 0; $targetItemBox = null;
 
-    // Check if the found item is currently stowed and has necessary data
+    // Check if the found item is currently stowed and has necessary PLACEMENT data
     $isStowed = ($itemData['status'] === 'stowed' &&
                  $itemData['containerId'] !== null &&
                  $itemData['positionX'] !== null && $itemData['positionY'] !== null && $itemData['positionZ'] !== null &&
-                 ($itemData['placedDimensionW'] !== null || $itemData['dimensionW'] !== null) && // Need width
-                 ($itemData['placedDimensionD'] !== null || $itemData['dimensionD'] !== null) && // Need depth
-                 ($itemData['placedDimensionH'] !== null || $itemData['dimensionH'] !== null)    // Need height
+                 $itemData['placedDimensionW'] !== null && $itemData['placedDimensionD'] !== null && $itemData['placedDimensionH'] !== null
+                 // We must use placed dimensions for obstruction checks if they exist
                 );
 
     if ($isStowed) {
         error_log("Search API: Item {$itemData['itemId']} is stowed in {$itemData['containerId']}. Calculating obstructions...");
 
-        // Build target item's box data for calculations
+        // Build target item's box data for calculations (using placed dimensions)
         $targetItemBox = [
-             'id'   => $itemData['itemId'],
-             'name' => $itemData['name'],
-             'x'    => (float)$itemData['positionX'],
-             'y'    => (float)$itemData['positionY'],
-             'z'    => (float)$itemData['positionZ'],
-             'w'    => (float)($itemData['placedDimensionW'] ?? $itemData['dimensionW']), // Placed first, fallback to original
-             'd'    => (float)($itemData['placedDimensionD'] ?? $itemData['dimensionD']),
-             'h'    => (float)($itemData['placedDimensionH'] ?? $itemData['dimensionH'])
+             'id'   => $itemData['itemId'], 'name' => $itemData['name'],
+             'x'    => (float)$itemData['positionX'], 'y'    => (float)$itemData['positionY'], 'z'    => (float)$itemData['positionZ'],
+             'w'    => (float)$itemData['placedDimensionW'], 'd'    => (float)$itemData['placedDimensionD'], 'h'    => (float)$itemData['placedDimensionH']
         ];
         $containerId = $itemData['containerId'];
 
-        // Fetch all other stowed items in the same container
+        // Fetch all other stowed items in the same container with valid placement data
         $sqlAllOthers = "SELECT itemId, name, positionX, positionY, positionZ,
-                                placedDimensionW, placedDimensionD, placedDimensionH,
-                                dimensionW, dimensionD, dimensionH
+                                placedDimensionW, placedDimensionD, placedDimensionH
                          FROM items
                          WHERE containerId = :cid
                            AND itemId != :tid
                            AND status = 'stowed'
-                           AND positionX IS NOT NULL"; // Ensure they have position
+                           AND positionX IS NOT NULL AND positionY IS NOT NULL AND positionZ IS NOT NULL
+                           AND placedDimensionW IS NOT NULL AND placedDimensionD IS NOT NULL AND placedDimensionH IS NOT NULL";
         $stmtAllOthers = $db->prepare($sqlAllOthers);
         $stmtAllOthers->execute([':cid' => $containerId, ':tid' => $itemData['itemId']]);
         $otherItemsInContainer = $stmtAllOthers->fetchAll(PDO::FETCH_ASSOC);
 
-        $obstructionItemsData = []; // Store data of items confirmed as obstructions
-        $epsilon = 0.001;
+        $obstructionItemsData = []; $epsilon = 0.001;
 
         foreach ($otherItemsInContainer as $otherItem) {
-             // Check if position data exists for the potential obstructor
-             if (!isset($otherItem['positionX'], $otherItem['positionY'], $otherItem['positionZ'])) continue;
-
-             // Build potential obstructor's box data
+             // Build potential obstructor's box data (already filtered for NOT NULL)
              $otherItemBox = [
-                 'id'   => $otherItem['itemId'],
-                 'name' => $otherItem['name'],
-                 'x'    => (float)$otherItem['positionX'],
-                 'y'    => (float)$otherItem['positionY'],
-                 'z'    => (float)$otherItem['positionZ'],
-                 'w'    => (float)($otherItem['placedDimensionW'] ?? $otherItem['dimensionW'] ?? 0),
-                 'd'    => (float)($otherItem['placedDimensionD'] ?? $otherItem['dimensionD'] ?? 0),
-                 'h'    => (float)($otherItem['placedDimensionH'] ?? $otherItem['dimensionH'] ?? 0)
+                 'id'   => $otherItem['itemId'], 'name' => $otherItem['name'],
+                 'x'    => (float)$otherItem['positionX'], 'y'    => (float)$otherItem['positionY'], 'z'    => (float)$otherItem['positionZ'],
+                 'w'    => (float)$otherItem['placedDimensionW'], 'd'    => (float)$otherItem['placedDimensionD'], 'h'    => (float)$otherItem['placedDimensionH']
              ];
 
-            // Check if 'other' is IN FRONT (larger X) and overlaps in Y/Z
-            if ($otherItemBox['x'] > ($targetItemBox['x'] + $epsilon)) {
-                 if (doBoxesOverlapYZ($targetItemBox, $otherItemBox)) {
-                      error_log("Search API: --> Item {$targetItemBox['id']} obstructed by {$otherItemBox['id']}");
-                      // Store necessary data for retrieval steps
+            // ---> FIX: Corrected Obstruction Check <---
+            // Check if 'other' is IN FRONT (SMALLER Y) and overlaps in X/Z
+            if ($otherItemBox['y'] < ($targetItemBox['y'] - $epsilon)) {
+                 if (doBoxesOverlapXZ($targetItemBox, $otherItemBox)) { // Use new XZ overlap check
+                      error_log("Search API: --> Item {$targetItemBox['id']} obstructed by {$otherItemBox['id']} (OtherY: {$otherItemBox['y']}, TargetY: {$targetItemBox['y']})");
                       $obstructionItemsData[] = ['boxData' => $otherItemBox, 'itemId' => $otherItem['itemId'], 'itemName' => $otherItem['name']];
                  }
              }
+             // ---> END FIX <---
         }
-        // Sort obstructions by X descending (front-most first)
-         usort($obstructionItemsData, fn($a, $b) => $b['boxData']['x'] <=> $a['boxData']['x']);
+        // ---> FIX: Corrected Obstruction Sort <---
+        // Sort obstructions by Y ascending (closest to opening first)
+         usort($obstructionItemsData, fn($a, $b) => $a['boxData']['y'] <=> $b['boxData']['y']);
+        // ---> END FIX <---
          $obstructionCount = count($obstructionItemsData);
 
-        // Build retrieval steps array according to API spec
+        // Build retrieval steps array
         $stepCounter = 1;
-        // Add 'remove' steps for obstructions
         foreach ($obstructionItemsData as $obstructor) {
              $retrievalSteps[] = [
-                 'step' => $stepCounter++,
-                 'action' => 'remove', // Or 'setAside'
-                 'itemId' => $obstructor['itemId'],
-                 'itemName' => $obstructor['itemName'],
-                 'containerId' => $containerId, // Add container context
-                 'position' => formatPositionForApi($obstructor['boxData']) // Add position context
+                 'step' => $stepCounter++, 'action' => 'remove', // Or 'setAside'
+                 'itemId' => $obstructor['itemId'], 'itemName' => $obstructor['itemName'],
+                 'containerId' => $containerId, 'position' => formatPositionForApi($obstructor['boxData'])
              ];
         }
-        // Add the 'retrieve' step for the target
         $retrievalSteps[] = [
-            'step' => $stepCounter++,
-            'action' => 'retrieve',
-            'itemId' => $targetItemBox['id'],
-            'itemName' => $targetItemBox['name'],
-            'containerId' => $containerId,
-            'position' => formatPositionForApi($targetItemBox)
+            'step' => $stepCounter++, 'action' => 'retrieve',
+            'itemId' => $targetItemBox['id'], 'itemName' => $targetItemBox['name'],
+            'containerId' => $containerId, 'position' => formatPositionForApi($targetItemBox)
         ];
-        // Optional 'placeBack' steps could be added here if needed
-        // ...
+        // Optional 'placeBack' steps could be added here
 
-    } else { // Item found but not stowed
-         error_log("Search API: Item {$itemData['itemId']} found but is not stowed (Status: {$itemData['status']}). No retrieval steps generated.");
-         // $retrievalSteps remains empty []
+    } else { // Item found but not stowed or missing placement data
+         error_log("Search API: Item {$itemData['itemId']} found but is not stowed or lacks complete placement data (Status: {$itemData['status']}). No retrieval steps generated.");
     }
     // --- End Step 3 ---
 
 
-    // --- Step 4: Format the final API item object (always done if item found) ---
+    // --- Step 4: Format the final API item object ---
+    // Use placed dimensions if available and item is stowed, otherwise maybe original?
+    $displayDimensions = null;
+    if ($isStowed && $targetItemBox !== null) {
+        $displayDimensions = [ // Format consistent with API response spec (start/end)
+            'startCoordinates' => ['width' => $targetItemBox['x'], 'depth' => $targetItemBox['y'], 'height' => $targetItemBox['z']],
+            'endCoordinates' => ['width' => $targetItemBox['x'] + $targetItemBox['w'], 'depth' => $targetItemBox['y'] + $targetItemBox['d'], 'height' => $targetItemBox['z'] + $targetItemBox['h']]
+        ];
+    } // else: dimensions remain null if not stowed/placed
+
     $apiItem = [
         'itemId' => $itemData['itemId'],
         'name' => $itemData['name'],
-        'containerId' => $itemData['containerId'], // Will be NULL if not stowed
-        'zone' => $itemData['zone'], // From LEFT JOIN, might be NULL if not stowed/container deleted
-        // Include position ONLY if stowed and calculable
-        'position' => $isStowed && $targetItemBox !== null ? formatPositionForApi($targetItemBox) : null,
-        // Include other useful details
+        'containerId' => $itemData['containerId'], // Null if not stowed
+        'zone' => $itemData['zone'], // Null if not stowed or container missing
+        'position' => $displayDimensions, // Use the formatted position/dimensions or null
         'status' => $itemData['status'],
         'expiryDate' => $itemData['expiryDate'],
         'remainingUses' => isset($itemData['remainingUses']) ? (int)$itemData['remainingUses'] : null,
@@ -193,6 +215,7 @@ try {
         'preferredZone' => $itemData['preferredZone'],
         'lastUpdated' => $itemData['lastUpdated'],
         'createdAt' => $itemData['createdAt'],
+        // Keep original dimensions for reference if needed by frontend
         'originalDimensions' => [
             'width' => (float)($itemData['dimensionW'] ?? 0),
             'depth' => (float)($itemData['dimensionD'] ?? 0),
@@ -202,17 +225,10 @@ try {
     // --- End Step 4 ---
 
     // --- Step 5: Construct final success response ---
-    $responseData = [
-        'success' => true,
-        'found' => true,
-        'item' => $apiItem,
-        'retrievalSteps' => $retrievalSteps // Send steps (will be empty if not stowed)
-    ];
-
-    http_response_code(200); // OK
+    $responseData = [ 'success' => true, 'found' => true, 'item' => $apiItem, 'retrievalSteps' => $retrievalSteps ];
+    http_response_code(200);
     echo json_encode($responseData);
     // --- End Step 5 ---
-
 
 } catch (PDOException | Exception $e) { // Catch DB or other exceptions
     $statusCode = ($e instanceof PDOException) ? 500 : ($e->getCode() >= 400 && $e->getCode() < 600 ? (int)$e->getCode() : 500);
@@ -222,5 +238,5 @@ try {
 } finally {
     $db = null; // Ensure DB connection closed
 }
-// Let index.php handle exit
+// Let index.php handle exit (remove final closing tag if possible)
 ?>

@@ -135,8 +135,8 @@ function InventoryPage() {
               <th style={tableHeaderStyle}>Status</th>
               <th style={tableHeaderStyle}>Mass (kg)</th>
               {/* Add other relevant columns like expiry, uses left? */}
-              {/* <th style={tableHeaderStyle}>Expiry</th> */}
-              {/* <th style={tableHeaderStyle}>Uses Left</th> */}
+              { <th style={tableHeaderStyle}>Expiry</th> }
+              { <th style={tableHeaderStyle}>Uses Left</th> }
             </tr>
           </thead>
           <tbody>
@@ -163,8 +163,8 @@ function InventoryPage() {
                 <td style={tableCellStyle}>{item.status}</td>
                  {/* Use nullish coalescing for potentially null mass */}
                 <td style={tableCellStyle}>{item.mass?.toFixed(1) ?? 'N/A'}</td>
-                {/* <td style={tableCellStyle}>{item.expiryDate || 'N/A'}</td> */}
-                {/* <td style={tableCellStyle}>{item.remainingUses ?? 'N/A'}</td> */}
+                { <td style={tableCellStyle}>{item.expiryDate || 'N/A'}</td> }
+                { <td style={tableCellStyle}>{item.remainingUses ?? 'N/A'}</td> }
               </tr>
             ))}
           </tbody>
