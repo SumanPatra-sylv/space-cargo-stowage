@@ -22,7 +22,9 @@ function SearchPage() {
 
     const handleSearch = async (e) => {
         e.preventDefault();
-        if (!searchTerm.trim()) {
+        const term = searchTerm.trim(); // Trim once at the beginning
+
+        if (!term) {
             setError("Please enter an Item ID or Name to search.");
             setSearchResult(null);
             return;
@@ -34,13 +36,20 @@ function SearchPage() {
         setManualPlaceMessage('');
 
         const searchParams = {};
-        // Basic check for Item ID format (adjust if needed)
-        if (/^ITM\d+$/i.test(searchTerm.trim())) {
-             searchParams.itemId = searchTerm.trim();
+
+        // --- CORRECTED LOGIC: Check for ITM prefix OR if it's purely numeric ---
+        // Determines if the search term looks like a potential ID (ITM... or all digits)
+        // Adjust this regex if your ID formats change significantly (e.g., contain dashes)
+        if (/^ITM\d+$/i.test(term) || /^\d+$/.test(term)) {
+             // If it starts with ITM... OR if it's purely numeric, treat as itemId
+             searchParams.itemId = term;
         } else {
-             searchParams.itemName = searchTerm.trim();
+             // Otherwise, treat it as an itemName for a LIKE search
+             searchParams.itemName = term;
         }
-        console.log("Search Parameters being sent:", searchParams);
+        // --- END CORRECTION ---
+
+        console.log("Search Parameters being sent:", searchParams); // Verify this log
 
         try {
             const response = await searchItems(searchParams);
@@ -266,81 +275,93 @@ function SearchPage() {
     };
 
     // Using basic inline styles as SearchPage.css was removed
-    // NOTE: Ensure your actual JSX structure is placed here correctly.
-    //       The following is a placeholder based on your original code.
     return (
-        <div style={{ padding: '20px' }}>
+        <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
             <h1>Search Item / Retrieve / Manual Place</h1>
 
             <form onSubmit={handleSearch} style={{ marginBottom: '20px' }}>
                 <input
-                    type="text"
+                    type="text" // Keep as text to preserve leading zeros
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Enter Item ID or Name"
                     aria-label="Search term"
-                    style={{ marginRight: '10px', padding: '8px', minWidth: '250px' }}
+                    style={{ marginRight: '10px', padding: '8px', minWidth: '250px', fontSize: '1rem' }}
                     disabled={isLoading}
                 />
-                <button type="submit" disabled={isLoading} style={{ padding: '8px 15px' }}>
+                <button type="submit" disabled={isLoading} style={{ padding: '8px 15px', fontSize: '1rem' }}>
                     {isLoading ? 'Searching...' : 'Search'}
                 </button>
             </form>
 
-            {error && <p style={{ color: 'red', marginTop: '15px', border: '1px solid red', padding: '10px' }}>Error: {error}</p>}
+            {/* General Error Display Area */}
+            {error && <p style={{ color: 'red', marginTop: '15px', border: '1px solid red', padding: '10px', backgroundColor: '#ffebee' }}>Error: {error}</p>}
 
-            {isLoading && !searchResult && <p style={{ marginTop: '15px' }}>Loading search results...</p>} {/* Show loading only if no result yet */}
+            {/* Loading Indicator for Search */}
+            {isLoading && !searchResult && <p style={{ marginTop: '15px' }}>Loading search results...</p>}
 
+            {/* Search Result Display Area */}
             {searchResult && searchResult.found && searchResult.item && (
-                 <div style={{ marginTop: '20px', border: '1px solid #eee', padding: '15px', borderRadius: '5px' }}>
+                 <div style={{ marginTop: '20px', border: '1px solid #ccc', padding: '15px', borderRadius: '5px', backgroundColor: '#f9f9f9' }}>
                     <h2>Search Result</h2>
                     {/* --- Display Item Details --- */}
-                    <p><strong>ID:</strong> {searchResult.item.itemId}</p>
-                    <p><strong>Name:</strong> {searchResult.item.name}</p>
-                    <p><strong>Container:</strong> {searchResult.item.containerId || 'N/A'}</p>
-                    <p><strong>Zone:</strong> {searchResult.item.zone || 'N/A'}</p>
-                    <p>
-                        <strong>Position (Start W D H):</strong> {' '}
-                        ({searchResult.item.position?.startCoordinates?.width?.toFixed(1) ?? 'N/A'},{' '}
-                        {searchResult.item.position?.startCoordinates?.depth?.toFixed(1) ?? 'N/A'},{' '}
-                        {searchResult.item.position?.startCoordinates?.height?.toFixed(1) ?? 'N/A'})
-                    </p>
-                    <p><strong>Dimensions (Placed W D H):</strong> {getPlacedDimensions()}</p>
-                    <p><strong>Mass:</strong> {searchResult.item.mass ? `${searchResult.item.mass} kg` : 'N/A'}</p>
-                    <p><strong>Uses Remaining:</strong> {searchResult.item.remainingUses ?? 'N/A (Unlimited)'}</p>
-                    <p><strong>Expiry Date:</strong> {searchResult.item.expiryDate || 'N/A'}</p>
-                    <p><strong>Status:</strong> {searchResult.item.status || 'N/A'}</p>
-                    <p><strong>Priority:</strong> {searchResult.item.priority ?? 'N/A'}</p>
-                    <p><strong>Last Updated:</strong> {searchResult.item.lastUpdated ? new Date(searchResult.item.lastUpdated).toLocaleString() : 'N/A'}</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '150px auto', gap: '5px 10px', marginBottom: '15px' }}>
+                        <strong>ID:</strong>               <span>{searchResult.item.itemId}</span>
+                        <strong>Name:</strong>             <span>{searchResult.item.name}</span>
+                        <strong>Container:</strong>        <span>{searchResult.item.containerId || 'N/A'}</span>
+                        <strong>Zone:</strong>             <span>{searchResult.item.zone || 'N/A'}</span>
+                        <strong>Position (Start):</strong> <span>
+                            W: {searchResult.item.position?.startCoordinates?.width?.toFixed(1) ?? 'N/A'},{' '}
+                            D: {searchResult.item.position?.startCoordinates?.depth?.toFixed(1) ?? 'N/A'},{' '}
+                            H: {searchResult.item.position?.startCoordinates?.height?.toFixed(1) ?? 'N/A'}
+                        </span>
+                        <strong>Dimensions (Placed):</strong> <span>W x D x H: {getPlacedDimensions()}</span>
+                        <strong>Mass:</strong>             <span>{searchResult.item.mass ? `${searchResult.item.mass} kg` : 'N/A'}</span>
+                        <strong>Uses Remaining:</strong>   <span>{searchResult.item.remainingUses ?? 'N/A (Unlimited)'}</span>
+                        <strong>Expiry Date:</strong>      <span>{searchResult.item.expiryDate || 'N/A'}</span>
+                        <strong>Status:</strong>           <span style={{ fontWeight: 'bold', color: searchResult.item.status === 'stowed' ? 'green' : 'orange' }}>{searchResult.item.status || 'N/A'}</span>
+                        <strong>Priority:</strong>         <span>{searchResult.item.priority ?? 'N/A'}</span>
+                        <strong>Last Updated:</strong>     <span>{searchResult.item.lastUpdated ? new Date(searchResult.item.lastUpdated).toLocaleString() : 'N/A'}</span>
+                    </div>
+
 
                     {/* --- Display Retrieval Steps --- */}
                     <h3>Retrieval Steps ({searchResult.retrievalSteps?.length || 0}):</h3>
                     {searchResult.retrievalSteps && searchResult.retrievalSteps.length > 0 ? (
-                        <ol style={{ paddingLeft: '20px', marginBottom: '15px' }}>
+                        <ol style={{ paddingLeft: '20px', marginBottom: '15px', border: '1px dashed #aaa', padding: '10px', backgroundColor: 'white' }}>
                             {searchResult.retrievalSteps.map((step) => (
-                                <li key={step.step}>
-                                    {step.action === 'remove' ? 'Remove Obstruction: ' : 'Retrieve Target: '}
-                                    Item {step.itemId} ({step.itemName})
+                                <li key={step.step} style={{ marginBottom: '5px', color: step.action === 'retrieve' ? '#d32f2f' : '#333' }}>
+                                    <strong>Step {step.step}:</strong> {step.action === 'remove' ? 'Remove Obstruction' : 'Retrieve Target'}:
+                                    Item <code>{step.itemId}</code> ({step.itemName})
+                                    {step.action === 'remove' && step.position?.startCoordinates && (
+                                        <span style={{fontSize: '0.8em', color: '#555'}}> (at W: {step.position.startCoordinates.width.toFixed(1)}, D: {step.position.startCoordinates.depth.toFixed(1)})</span>
+                                    )}
                                 </li>
                             ))}
                         </ol>
                     ) : (
-                        <p style={{ marginBottom: '15px' }}>No obstructions. Item is directly accessible.</p>
+                        <p style={{ marginBottom: '15px', fontStyle: 'italic' }}>
+                            {searchResult.item.status === 'stowed' ? 'No obstructions. Item is directly accessible.' : 'Item not currently stowed.'}
+                         </p>
                     )}
 
                     {/* --- Action Buttons --- */}
-                    <div style={{ marginTop: '15px' }}>
-                         <button
-                            onClick={handleRetrieve}
-                            disabled={isLoading || showManualPlaceForm}
-                            style={{ padding: '8px 15px', marginRight: '10px' }}
-                         >
-                            Confirm Item Retrieved
-                         </button>
+                    <div style={{ marginTop: '15px', borderTop: '1px solid #eee', paddingTop: '15px' }}>
+                         {/* Only show retrieve button if item is stowed and not already in manual place mode */}
+                         {searchResult.item.status === 'stowed' && (
+                             <button
+                                onClick={handleRetrieve}
+                                disabled={isLoading || showManualPlaceForm}
+                                style={{ padding: '8px 15px', marginRight: '10px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                             >
+                                Confirm Item Retrieved
+                             </button>
+                         )}
+                         {/* Only show manual place button if not already in manual place mode */}
                          <button
                             onClick={handleShowManualPlace}
                             disabled={isLoading || showManualPlaceForm}
-                            style={{ padding: '8px 15px' }}
+                            style={{ padding: '8px 15px', backgroundColor: '#2196F3', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                          >
                             Manually Place This Item
                          </button>
@@ -348,52 +369,48 @@ function SearchPage() {
 
                     {/* --- Manual Placement Form --- */}
                     {showManualPlaceForm && (
-                        <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '15px', backgroundColor: '#f9f9f9', padding: '15px', borderRadius: '5px' }}>
+                        <div style={{ marginTop: '20px', borderTop: '2px solid #2196F3', paddingTop: '15px', backgroundColor: '#e3f2fd', padding: '15px', borderRadius: '5px' }}>
                             <h3>Manual Placement for {searchResult.item.itemId}</h3>
-                             {manualPlaceMessage && <p style={{ marginTop: '10px', marginBottom:'10px', padding:'8px', border: `1px solid ${manualPlaceMessage.includes('Success:') ? 'green' : 'red'}`, color: manualPlaceMessage.includes('Success:') ? 'green' : 'red', backgroundColor: manualPlaceMessage.includes('Success:') ? '#e8f5e9' : '#ffebee' }}>{manualPlaceMessage}</p>}
+                             {/* Message area specific to manual placement */}
+                             {manualPlaceMessage && <p style={{ marginTop: '10px', marginBottom:'15px', padding:'10px', border: `1px solid ${manualPlaceMessage.includes('Success:') ? 'green' : 'red'}`, color: manualPlaceMessage.includes('Success:') ? 'darkgreen' : 'darkred', backgroundColor: manualPlaceMessage.includes('Success:') ? '#c8e6c9' : '#ffcdd2', borderRadius: '4px' }}>{manualPlaceMessage}</p>}
                             <form onSubmit={handleManualPlaceSubmit}>
-                                {/* ... Form Inputs ... */}
                                 <div style={{ marginBottom: '10px' }}>
-                                    <label htmlFor="containerId" style={{ marginRight: '5px', display: 'inline-block', width: '100px' }}>Container ID:</label>
-                                    <input type="text" id="containerId" name="containerId" value={manualPlaceData.containerId} onChange={handleManualPlaceInputChange} required disabled={isLoading} />
+                                    <label htmlFor="containerId" style={{ marginRight: '5px', display: 'inline-block', width: '100px', fontWeight: 'bold' }}>Container ID:</label>
+                                    <input type="text" id="containerId" name="containerId" value={manualPlaceData.containerId} onChange={handleManualPlaceInputChange} required disabled={isLoading} style={{ padding: '5px' }} />
                                 </div>
-                                <fieldset style={{ border: '1px solid #ccc', padding: '10px', marginBottom: '10px' }}>
-                                    <legend>Position (Start & End Coordinates)</legend>
-                                    <p style={{fontSize: '0.9em', color: '#555', marginTop: '0'}}>Enter the coordinates defining the box the item will occupy.</p>
-                                    <div style={{ marginBottom: '5px' }}>
-                                        <label htmlFor="startX" style={{ display: 'inline-block', width: '110px' }}>Start W (X):</label>
-                                        <input type="number" step="any" id="startX" name="startX" value={manualPlaceData.startX} onChange={handleManualPlaceInputChange} required style={{ width: '80px' }} disabled={isLoading}/>
-                                    </div>
-                                    <div style={{ marginBottom: '5px' }}>
-                                        <label htmlFor="startY" style={{ display: 'inline-block', width: '110px' }}>Start D (Y):</label>
-                                        <input type="number" step="any" id="startY" name="startY" value={manualPlaceData.startY} onChange={handleManualPlaceInputChange} required style={{ width: '80px' }} disabled={isLoading}/>
-                                    </div>
-                                     <div style={{ marginBottom: '10px' }}>
-                                        <label htmlFor="startZ" style={{ display: 'inline-block', width: '110px' }}>Start H (Z):</label>
-                                        <input type="number" step="any" id="startZ" name="startZ" value={manualPlaceData.startZ} onChange={handleManualPlaceInputChange} required style={{ width: '80px' }} disabled={isLoading} />
-                                    </div>
-                                     <hr style={{ margin: '10px 0' }}/>
-                                     <div style={{ marginBottom: '5px' }}>
-                                        <label htmlFor="endX" style={{ display: 'inline-block', width: '110px' }}>End W (X):</label>
-                                        <input type="number" step="any" id="endX" name="endX" value={manualPlaceData.endX} onChange={handleManualPlaceInputChange} required style={{ width: '80px' }} disabled={isLoading}/>
-                                    </div>
-                                    <div style={{ marginBottom: '5px' }}>
-                                        <label htmlFor="endY" style={{ display: 'inline-block', width: '110px' }}>End D (Y):</label>
-                                        <input type="number" step="any" id="endY" name="endY" value={manualPlaceData.endY} onChange={handleManualPlaceInputChange} required style={{ width: '80px' }} disabled={isLoading}/>
-                                    </div>
-                                     <div>
-                                        <label htmlFor="endZ" style={{ display: 'inline-block', width: '110px' }}>End H (Z):</label>
-                                        <input type="number" step="any" id="endZ" name="endZ" value={manualPlaceData.endZ} onChange={handleManualPlaceInputChange} required style={{ width: '80px' }} disabled={isLoading}/>
+                                <fieldset style={{ border: '1px solid #ccc', padding: '10px 15px', marginBottom: '15px', backgroundColor: 'white' }}>
+                                    <legend style={{ fontWeight: 'bold' }}>Occupied Box Coordinates</legend>
+                                    <p style={{fontSize: '0.9em', color: '#555', marginTop: '0', marginBottom: '10px'}}>Enter the start (min W, D, H) and end (max W, D, H) coordinates defining the box.</p>
+                                    {/* Grouping inputs for better layout */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '120px 100px 120px 100px', gap: '10px 15px', alignItems: 'center' }}>
+                                        <label htmlFor="startX">Start W (X):</label>
+                                        <input type="number" step="any" id="startX" name="startX" value={manualPlaceData.startX} onChange={handleManualPlaceInputChange} required style={{ width: '90px', padding: '5px' }} disabled={isLoading}/>
+
+                                        <label htmlFor="endX">End W (X):</label>
+                                        <input type="number" step="any" id="endX" name="endX" value={manualPlaceData.endX} onChange={handleManualPlaceInputChange} required style={{ width: '90px', padding: '5px' }} disabled={isLoading}/>
+
+                                        <label htmlFor="startY">Start D (Y):</label>
+                                        <input type="number" step="any" id="startY" name="startY" value={manualPlaceData.startY} onChange={handleManualPlaceInputChange} required style={{ width: '90px', padding: '5px' }} disabled={isLoading}/>
+
+                                        <label htmlFor="endY">End D (Y):</label>
+                                        <input type="number" step="any" id="endY" name="endY" value={manualPlaceData.endY} onChange={handleManualPlaceInputChange} required style={{ width: '90px', padding: '5px' }} disabled={isLoading}/>
+
+                                        <label htmlFor="startZ">Start H (Z):</label>
+                                        <input type="number" step="any" id="startZ" name="startZ" value={manualPlaceData.startZ} onChange={handleManualPlaceInputChange} required style={{ width: '90px', padding: '5px' }} disabled={isLoading} />
+
+                                        <label htmlFor="endZ">End H (Z):</label>
+                                        <input type="number" step="any" id="endZ" name="endZ" value={manualPlaceData.endZ} onChange={handleManualPlaceInputChange} required style={{ width: '90px', padding: '5px' }} disabled={isLoading}/>
                                     </div>
                                 </fieldset>
-                                <button type="submit" disabled={isLoading} style={{ padding: '8px 15px' }}>
+                                <button type="submit" disabled={isLoading} style={{ padding: '8px 15px', backgroundColor: '#ff9800', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                                     {isLoading ? 'Placing...' : 'Confirm Manual Placement'}
                                  </button>
                             </form>
                         </div>
                     )}
                  </div>
-            )}
+            )} {/* End Search Result Display Area */}
+
         </div> // Closing div for the main component wrapper
     ); // Closing parenthesis for return
 } // Closing brace for SearchPage function
