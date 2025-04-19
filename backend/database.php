@@ -50,7 +50,7 @@ function initializeDatabaseAndFiles(string $dbPath): ?PDO {
                 remainingUses INTEGER,
                 preferredZone TEXT NULL,
                 preferredContainerId TEXT NULL,                 -- <<<<<<< CORRECTED: Added this line
-                status TEXT DEFAULT 'available' CHECK(status IN ('available', 'stowed', 'disposed', 'reserved')),
+                status TEXT DEFAULT 'available' CHECK(status IN ('available', 'stowed', 'disposed', 'reserved','expired','consumed')),
                 createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
                 lastUpdated TEXT DEFAULT CURRENT_TIMESTAMP,
                 containerId TEXT NULL,

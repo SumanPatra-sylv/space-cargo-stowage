@@ -58,7 +58,7 @@ try {
             remainingUses INTEGER,                          -- Initialized to usageLimit or NULL
             preferredZone TEXT NULL,                        -- Can be NULL if no preference
             preferredContainerId TEXT NULL,                 -- <<<<< ADDED THIS LINE (Can be NULL)
-            status TEXT DEFAULT 'available' CHECK(status IN ('available', 'stowed', 'disposed', 'reserved')), -- Added CHECK constraint
+            status TEXT DEFAULT 'available' CHECK(status IN ('available', 'stowed', 'disposed', 'reserved','expired',consumed')), -- Added CHECK constraint
             createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
             lastUpdated TEXT DEFAULT CURRENT_TIMESTAMP,     -- For tracking changes
 
